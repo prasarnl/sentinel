@@ -1,0 +1,18 @@
+# secrets
+deploy/.env
+*.pem
+*.key
+
+# node
+web/node_modules/
+web/dist/
+
+# go
+server/downloads/*
+!server/downloads/.gitkeep
+server/internal/spa/dist/*
+!server/internal/spa/dist/.gitkeep
+
+# local dev / OS
+.DS_Store
+*.log

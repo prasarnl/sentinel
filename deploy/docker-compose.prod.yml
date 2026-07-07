@@ -1,0 +1,28 @@
+# Production overlay: fronts the server with Caddy for automatic HTTPS on
+# observe.kanomcakey.com (ports 80/443 need to be reachable from the internet
+# for Let's Encrypt's HTTP-01/TLS-ALPN challenges). The server itself keeps
+# listening on :4000 as requested, just no longer exposed directly.
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+services:
+  server:
+    ports: !reset []
+    expose:
+      - "4000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - server
+
+volumes:
+  caddy_data:
+  caddy_config:

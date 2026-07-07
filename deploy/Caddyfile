@@ -1,0 +1,8 @@
+observe.kanomcakey.com {
+	# Internal-only deployment: no public HTTP-01 validation is possible, so
+	# use Caddy's own local CA instead of Let's Encrypt. Browsers will warn
+	# once per device until that CA is trusted — see deploy/README notes.
+	tls internal
+
+	reverse_proxy server:4000
+}
