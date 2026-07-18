@@ -26,6 +26,8 @@ const DEFAULTS: ConfigForm = {
   max_tokens: 128,
   request_timeout_secs: 120,
   model_load_timeout_secs: 180,
+  context_window: null,
+  batch_size: null,
 };
 
 const runStatusColor: Record<BenchmarkRunStatus, string> = {
@@ -63,6 +65,32 @@ function Field({
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </div>
+  );
+}
+
+function OptionalField({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value: number | null | undefined;
+  onChange: (v: number | null) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium text-[var(--text-secondary)]">{label}</label>
+      <Input
+        type="number"
+        min={1}
+        placeholder="target default"
+        value={value ?? ""}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value === "" ? null : Number(e.target.value))}
       />
     </div>
   );
@@ -116,6 +144,8 @@ export function LLMTargetDetail() {
         max_tokens: c.max_tokens,
         request_timeout_secs: c.request_timeout_secs,
         model_load_timeout_secs: c.model_load_timeout_secs,
+        context_window: c.context_window ?? null,
+        batch_size: c.batch_size ?? null,
       });
     });
     api
@@ -279,7 +309,23 @@ export function LLMTargetDetail() {
                 disabled={!isAdmin}
                 onChange={(v) => setForm((f) => ({ ...f, model_load_timeout_secs: v }))}
               />
+              <OptionalField
+                label="Context window (n_ctx)"
+                value={form.context_window}
+                disabled={!isAdmin}
+                onChange={(v) => setForm((f) => ({ ...f, context_window: v }))}
+              />
+              <OptionalField
+                label="Batch size (n_batch)"
+                value={form.batch_size}
+                disabled={!isAdmin}
+                onChange={(v) => setForm((f) => ({ ...f, batch_size: v }))}
+              />
             </div>
+            <p className="mt-2 text-xs text-[var(--text-muted)]">
+              Context window and batch size are sent as best-effort overrides on each request — support depends on
+              the target's backend. Leave blank to use the target's default.
+            </p>
             {isAdmin && (
               <div className="mt-3 flex justify-end">
                 <Button variant="secondary" onClick={onSaveConfig} disabled={savingConfig}>

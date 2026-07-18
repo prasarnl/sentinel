@@ -86,6 +86,12 @@ export interface LLMBenchmarkConfig {
   max_tokens: number;
   request_timeout_secs: number;
   model_load_timeout_secs: number;
+  // Optional, best-effort: sent as n_ctx/n_batch on each request. Most
+  // llama.cpp-family servers fix these at process launch, so whether they
+  // have any effect depends on the target's backend. null/omitted means
+  // don't send them.
+  context_window?: number | null;
+  batch_size?: number | null;
   updated_at: string;
 }
 
