@@ -68,6 +68,78 @@ export interface LatestSnapshot {
   gpu?: GPUPoint[];
 }
 
+export interface LLMTarget {
+  id: string;
+  name: string;
+  base_url: string;
+  has_api_key: boolean;
+  supports_model_swap: boolean;
+  created_at: string;
+}
+
+export interface LLMBenchmarkConfig {
+  target_id: string;
+  concurrency: number;
+  num_requests: number;
+  warmup_requests: number;
+  prompt_tokens: number;
+  max_tokens: number;
+  request_timeout_secs: number;
+  model_load_timeout_secs: number;
+  updated_at: string;
+}
+
+export type BenchmarkRunStatus = "running" | "completed" | "failed" | "cancelled";
+
+export interface LatencyStats {
+  p50: number;
+  p95: number;
+  mean: number;
+  min: number;
+  max: number;
+}
+
+export interface BenchmarkSummary {
+  requests: number;
+  failed: number;
+  errors?: string[];
+  wall_time_ms: number;
+  throughput_tokens_per_sec: number;
+  ttft_ms: LatencyStats;
+  tokens_per_sec: LatencyStats;
+}
+
+export interface LLMBenchmarkRun {
+  id: string;
+  target_id: string;
+  model: string;
+  batch_id?: string;
+  config: LLMBenchmarkConfig;
+  status: BenchmarkRunStatus;
+  summary?: BenchmarkSummary;
+  error?: string;
+  started_at: string;
+  completed_at?: string;
+}
+
+export type BenchmarkStage = "unloading" | "loading" | "benchmarking" | "model_done" | "done";
+
+export interface BenchmarkProgressEvent {
+  batch_id: string;
+  model?: string;
+  model_index?: number;
+  models_total?: number;
+  stage: BenchmarkStage;
+  completed: number;
+  total: number;
+  failed: number;
+  last_ttft_ms?: number;
+  last_tokens_per_sec?: number;
+  last_error?: string;
+  done: boolean;
+  run?: LLMBenchmarkRun; // present when stage === "model_done"
+}
+
 class APIError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -143,6 +215,49 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ retention_days: retentionDays }),
     }),
+
+  listLLMTargets: () => request<LLMTarget[]>("/llm-targets"),
+  getLLMTarget: (id: string) =>
+    request<{ target: LLMTarget; config: LLMBenchmarkConfig }>(`/llm-targets/${id}`),
+  createLLMTarget: (name: string, baseUrl: string, apiKey: string, supportsModelSwap: boolean) =>
+    request<{ target: LLMTarget; config: LLMBenchmarkConfig }>("/llm-targets", {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        base_url: baseUrl,
+        api_key: apiKey,
+        supports_model_swap: supportsModelSwap,
+      }),
+    }),
+  updateLLMTarget: (
+    id: string,
+    patch: { name?: string; base_url?: string; api_key?: string; supports_model_swap?: boolean },
+  ) => request<LLMTarget>(`/llm-targets/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteLLMTarget: (id: string) => request<void>(`/llm-targets/${id}`, { method: "DELETE" }),
+
+  discoverModels: (baseUrl: string, apiKey: string) =>
+    request<{ models: string[] }>("/llm-targets/discover-models", {
+      method: "POST",
+      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+    }),
+  getLLMTargetModels: (id: string) => request<{ models: string[] }>(`/llm-targets/${id}/models`),
+
+  updateLLMBenchmarkConfig: (id: string, config: Omit<LLMBenchmarkConfig, "target_id" | "updated_at">) =>
+    request<LLMBenchmarkConfig>(`/llm-targets/${id}/config`, {
+      method: "PUT",
+      body: JSON.stringify(config),
+    }),
+
+  runBenchmark: (id: string, models: string[]) =>
+    request<{ batch_id: string; target_id: string; models: string[] }>(`/llm-targets/${id}/benchmark`, {
+      method: "POST",
+      body: JSON.stringify({ models }),
+    }),
+  listBenchmarkRuns: (id: string) => request<LLMBenchmarkRun[]>(`/llm-targets/${id}/benchmarks`),
+  getBenchmarkRun: (id: string, runId: string) =>
+    request<LLMBenchmarkRun>(`/llm-targets/${id}/benchmarks/${runId}`),
+  deleteBenchmarkRun: (id: string, runId: string) =>
+    request<void>(`/llm-targets/${id}/benchmarks/${runId}`, { method: "DELETE" }),
 };
 
 export { APIError };

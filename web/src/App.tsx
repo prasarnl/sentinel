@@ -6,6 +6,8 @@ import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { Hosts } from "./pages/Hosts";
 import { HostDetail } from "./pages/HostDetail";
+import { LLMTargets } from "./pages/LLMTargets";
+import { LLMTargetDetail } from "./pages/LLMTargetDetail";
 import { Users } from "./pages/Users";
 import { Settings } from "./pages/Settings";
 
@@ -42,6 +44,8 @@ function AppRoutes() {
         <Route index element={<Dashboard />} />
         <Route path="hosts" element={<Hosts />} />
         <Route path="hosts/:id" element={<HostDetail />} />
+        <Route path="llm-targets" element={<LLMTargets />} />
+        <Route path="llm-targets/:id" element={<LLMTargetDetail />} />
         <Route
           path="users"
           element={

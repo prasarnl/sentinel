@@ -57,6 +57,13 @@ func (s *Server) Router() (http.Handler, error) {
 
 			r.Get("/settings", s.GetSettings)
 
+			r.Get("/llm-targets", s.ListLLMTargets)
+			r.Get("/llm-targets/{id}", s.GetLLMTarget)
+			r.Get("/llm-targets/{id}/models", s.GetTargetModels)
+			r.Get("/llm-targets/{id}/benchmarks", s.ListBenchmarkRuns)
+			r.Get("/llm-targets/{id}/benchmarks/{runId}", s.GetBenchmarkRun)
+			r.Get("/llm-targets/{id}/benchmarks/batch/{batchId}/stream", s.StreamBenchmarkBatch)
+
 			r.Group(func(r chi.Router) {
 				r.Use(auth.RequireAdmin)
 				r.Post("/hosts", s.CreateHost)
@@ -66,6 +73,14 @@ func (s *Server) Router() (http.Handler, error) {
 				r.Post("/users", s.CreateUser)
 				r.Patch("/users/{id}", s.UpdateUser)
 				r.Delete("/users/{id}", s.DeleteUser)
+
+				r.Post("/llm-targets", s.CreateLLMTarget)
+				r.Post("/llm-targets/discover-models", s.DiscoverModels)
+				r.Patch("/llm-targets/{id}", s.UpdateLLMTarget)
+				r.Delete("/llm-targets/{id}", s.DeleteLLMTarget)
+				r.Put("/llm-targets/{id}/config", s.UpdateLLMBenchmarkConfig)
+				r.Post("/llm-targets/{id}/benchmark", s.RunBenchmark)
+				r.Delete("/llm-targets/{id}/benchmarks/{runId}", s.DeleteBenchmarkRun)
 			})
 		})
 	})
