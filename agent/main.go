@@ -58,11 +58,22 @@ func (p *program) run() {
 			if buf.IsEmpty() {
 				continue
 			}
-			if err := client.Push(buf.Snapshot()); err != nil {
+
+			payload := buf.Snapshot()
+			// Report what discovery found so the server can register these
+			// endpoints and let an operator name or disable them.
+			payload.DiscoveredLLM = coll.DiscoveredEndpoints()
+
+			resp, err := client.Push(payload)
+			if err != nil {
 				log.Printf("push failed, will retry next tick: %v", err)
 				continue
 			}
 			buf.Clear()
+
+			// The ingest response is the agent's only channel for receiving
+			// configuration, so it is applied on every successful push.
+			coll.SetServerEndpoints(resp.LLMEndpoints, resp.DisabledLLMEndpoints)
 		}
 	}
 }

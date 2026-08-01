@@ -58,6 +58,8 @@ func (s *Server) Router() (http.Handler, error) {
 
 			r.Get("/settings", s.GetSettings)
 
+			r.Get("/llm-endpoints", s.ListLLMEndpoints)
+
 			r.Get("/llm-targets", s.ListLLMTargets)
 			r.Get("/llm-targets/{id}", s.GetLLMTarget)
 			r.Get("/llm-targets/{id}/models", s.GetTargetModels)
@@ -74,6 +76,10 @@ func (s *Server) Router() (http.Handler, error) {
 				r.Post("/users", s.CreateUser)
 				r.Patch("/users/{id}", s.UpdateUser)
 				r.Delete("/users/{id}", s.DeleteUser)
+
+				r.Post("/llm-endpoints", s.CreateLLMEndpoint)
+				r.Patch("/llm-endpoints/{id}", s.UpdateLLMEndpoint)
+				r.Delete("/llm-endpoints/{id}", s.DeleteLLMEndpoint)
 
 				r.Post("/llm-targets", s.CreateLLMTarget)
 				r.Post("/llm-targets/discover-models", s.DiscoverModels)

@@ -33,8 +33,10 @@ func New(llmCfg config.LLM) *Collector {
 		prevDiskIO: make(map[string]diskIOState),
 		llmConfig:  llmCfg,
 		llm: &llmState{
-			endpoints: make(map[string]llmscrape.Endpoint),
-			negative:  make(map[string]time.Time),
+			endpoints:  make(map[string]llmscrape.Endpoint),
+			negative:   make(map[string]time.Time),
+			fromServer: make(map[string]llmscrape.Endpoint),
+			disabled:   make(map[string]bool),
 		},
 		// Inference endpoints are local, so short timeouts are right: a slow
 		// one must never delay the tick reporting CPU/mem/disk/GPU.

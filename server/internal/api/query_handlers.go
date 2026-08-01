@@ -72,9 +72,13 @@ func (s *Server) LatestSnapshot(w http.ResponseWriter, r *http.Request) {
 		result["gpu"] = gpus
 	}
 
+	// Joined against the registry so a disabled endpoint disappears from the
+	// dashboard immediately, rather than lingering on its last sample.
 	llmRows, err := s.Pool.Query(ctx, `
-		SELECT DISTINCT ON (endpoint) `+llmColumns+`
-		FROM metrics_llm WHERE host_id = $1 ORDER BY endpoint, time DESC`, hostID)
+		SELECT DISTINCT ON (m.endpoint) `+llmColumns+`
+		FROM metrics_llm m
+		JOIN llm_endpoints e ON e.id = m.endpoint_id AND e.enabled = true
+		WHERE m.host_id = $1 ORDER BY m.endpoint, m.time DESC`, hostID)
 	if err == nil {
 		defer llmRows.Close()
 		llms := []map[string]any{}
@@ -91,13 +95,13 @@ func (s *Server) LatestSnapshot(w http.ResponseWriter, r *http.Request) {
 
 // llmColumns is shared by the snapshot and raw-history queries so the two
 // stay in step with scanLLM's field order.
-const llmColumns = `time, endpoint, runtime, model,
-	kv_cache_usage_ratio, kv_cache_tokens,
-	prompt_tokens_total, generated_tokens_total,
-	prompt_tokens_per_sec, generated_tokens_per_sec,
-	prefix_cache_queries_total, prefix_cache_hits_total, prefix_cache_hit_ratio,
-	requests_running, requests_waiting,
-	ttft_ms_avg, tpot_ms_avg, preemptions_per_sec`
+const llmColumns = `m.time, m.endpoint, m.runtime, m.model,
+	m.kv_cache_usage_ratio, m.kv_cache_tokens,
+	m.prompt_tokens_total, m.generated_tokens_total,
+	m.prompt_tokens_per_sec, m.generated_tokens_per_sec,
+	m.prefix_cache_queries_total, m.prefix_cache_hits_total, m.prefix_cache_hit_ratio,
+	m.requests_running, m.requests_waiting,
+	m.ttft_ms_avg, m.tpot_ms_avg, m.preemptions_per_sec`
 
 // scanLLM reads one metrics_llm row. Nullable metrics stay nil in the JSON so
 // the dashboard can hide a tile the runtime cannot report, rather than
@@ -346,20 +350,30 @@ func (s *Server) HistoryLLM(w http.ResponseWriter, r *http.Request) {
 	}
 	points := []point{}
 
+	// Both the raw table and the rollup are keyed by endpoint_id, so the URL
+	// the client holds is resolved through the registry first.
+	var endpointID string
+	err := s.Pool.QueryRow(ctx,
+		`SELECT id FROM llm_endpoints WHERE host_id = $1 AND url = $2`, hostID, endpoint).Scan(&endpointID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no such endpoint for this host")
+		return
+	}
+
 	query := `SELECT time, kv_cache_usage_ratio, prompt_tokens_per_sec, generated_tokens_per_sec,
 			prefix_cache_hit_ratio, requests_running::float8, requests_waiting::float8,
 			ttft_ms_avg, tpot_ms_avg, preemptions_per_sec
-		FROM metrics_llm WHERE host_id = $1 AND endpoint = $2 AND time >= $3 ORDER BY time`
+		FROM metrics_llm WHERE endpoint_id = $1 AND time >= $2 ORDER BY time`
 	if rng > rawCutoff {
 		// avg() over the INT request counts yields numeric, so it is cast
 		// back to float8 to match the point shape the raw branch produces.
 		query = `SELECT bucket, avg_kv_cache_usage_ratio, avg_prompt_tokens_per_sec, avg_generated_tokens_per_sec,
 				avg_prefix_cache_hit_ratio, avg_requests_running::float8, avg_requests_waiting::float8,
 				avg_ttft_ms, avg_tpot_ms, avg_preemptions_per_sec
-			FROM metrics_llm_1m WHERE host_id = $1 AND endpoint = $2 AND bucket >= $3 ORDER BY bucket`
+			FROM metrics_llm_1m WHERE endpoint_id = $1 AND bucket >= $2 ORDER BY bucket`
 	}
 
-	rows, err := s.Pool.Query(ctx, query, hostID, endpoint, since)
+	rows, err := s.Pool.Query(ctx, query, endpointID, since)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return

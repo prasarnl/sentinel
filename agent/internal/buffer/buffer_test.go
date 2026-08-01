@@ -7,6 +7,17 @@ import (
 	"sentinel/agent/internal/models"
 )
 
+// notBuffered lists IngestPayload fields that deliberately are not
+// accumulated. Each needs a reason, because the default must be that a field
+// added to the payload is buffered — forgetting one drops data silently.
+//
+//   - DiscoveredLLM is the agent's current view of which endpoints exist, not
+//     a time series. It is attached fresh at push time. Accumulating it would
+//     resend the same endpoints once per buffered tick after an outage.
+var notBuffered = map[string]string{
+	"DiscoveredLLM": "current state, attached at push time, not accumulated",
+}
+
 // oneOfEverything returns a payload holding a single sample in every slice
 // field of IngestPayload, discovered by reflection rather than listed by
 // hand so new metric families are covered automatically.
@@ -36,8 +47,12 @@ func TestAddCarriesEveryPayloadField(t *testing.T) {
 		if field.Kind() != reflect.Slice {
 			continue
 		}
+		name := got.Type().Field(i).Name
+		if _, exempt := notBuffered[name]; exempt {
+			continue
+		}
 		if field.Len() == 0 {
-			t.Errorf("Buffer.Add dropped IngestPayload.%s — add it to Add()", got.Type().Field(i).Name)
+			t.Errorf("Buffer.Add dropped IngestPayload.%s — add it to Add(), or document it in notBuffered", name)
 		}
 	}
 }
@@ -53,6 +68,9 @@ func TestIsEmptyConsidersEveryPayloadField(t *testing.T) {
 			continue
 		}
 		name := v.Type().Field(i).Name
+		if _, exempt := notBuffered[name]; exempt {
+			continue
+		}
 
 		// Build a payload populated in exactly one field.
 		var only models.IngestPayload

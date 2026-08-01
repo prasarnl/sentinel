@@ -92,12 +92,69 @@ type GPUSample struct {
 // of sync on field names or JSON tags.
 type LLMSample = llmscrape.Sample
 
+// DiscoveredLLMEndpoint is something an agent's socket discovery found on its
+// host. Reporting these upward is what puts autodetected endpoints in the
+// registry, so they can be named or disabled from the UI.
+type DiscoveredLLMEndpoint struct {
+	URL     string `json:"url"`
+	Runtime string `json:"runtime"`
+}
+
 type IngestPayload struct {
 	CPU  []CPUSample  `json:"cpu,omitempty"`
 	Mem  []MemSample  `json:"mem,omitempty"`
 	Disk []DiskSample `json:"disk,omitempty"`
 	GPU  []GPUSample  `json:"gpu,omitempty"`
 	LLM  []LLMSample  `json:"llm,omitempty"`
+
+	DiscoveredLLM []DiscoveredLLMEndpoint `json:"discovered_llm,omitempty"`
+}
+
+// IngestResponse is returned from /ingest. The agent has no other channel for
+// receiving configuration — it only ever pushes — so the response to the push
+// it already makes is how server-side settings reach it, with no extra
+// endpoint, request, or auth path.
+type IngestResponse struct {
+	LLMEndpoints []AgentLLMEndpoint `json:"llm_endpoints"`
+	// DisabledLLMEndpoints are URLs the agent must not scrape even if its own
+	// discovery finds them. Without this an operator could disable an
+	// endpoint and have autodetect immediately rediscover and resume it.
+	DisabledLLMEndpoints []string `json:"disabled_llm_endpoints,omitempty"`
+}
+
+// AgentLLMEndpoint is the subset of a registry entry an agent needs to scrape
+// it. Disabled endpoints are simply omitted rather than sent with a flag, so
+// an older agent that ignores this field cannot keep scraping something an
+// operator switched off.
+type AgentLLMEndpoint struct {
+	URL     string `json:"url"`
+	Runtime string `json:"runtime,omitempty"`
+	APIKey  string `json:"api_key,omitempty"`
+}
+
+// LLMEndpoint is a registered inference endpoint to scrape. A nil HostID
+// means no agent can reach it and the server polls it directly.
+type LLMEndpoint struct {
+	ID        string  `json:"id"`
+	HostID    *string `json:"host_id"`
+	HostName  *string `json:"host_name,omitempty"` // joined for display
+	Name      *string `json:"name"`
+	URL       string  `json:"url"`
+	Runtime   string  `json:"runtime"`
+	APIKey    *string `json:"-"` // sent outbound, so stored reversibly; never serialized
+	HasAPIKey bool    `json:"has_api_key"`
+	Enabled   bool    `json:"enabled"`
+	Source    string  `json:"source"` // manual | autodetected
+
+	// LastScrapeError distinguishes "unreachable", "reachable but publishes
+	// no metrics", and "working" — without it all three look identical in
+	// the UI, as an endpoint with no data.
+	LastScrapeAt    *time.Time `json:"last_scrape_at"`
+	LastScrapeError *string    `json:"last_scrape_error"`
+
+	// Model is the most recently observed model name, for display.
+	Model     *string   `json:"model,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // LLMTarget is an OpenAI-compatible inference endpoint the server can run

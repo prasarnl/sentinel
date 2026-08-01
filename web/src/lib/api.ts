@@ -112,6 +112,29 @@ export interface LatestSnapshot {
   llm?: LLMPoint[];
 }
 
+export type LLMEndpointSource = "manual" | "autodetected";
+
+/** A registered inference endpoint. A null host_id means no agent can reach
+ * it, so the Sentinel server polls it directly over the network. */
+export interface LLMEndpoint {
+  id: string;
+  host_id: string | null;
+  host_name?: string | null;
+  name: string | null;
+  url: string;
+  runtime: "auto" | LLMRuntime;
+  has_api_key: boolean;
+  enabled: boolean;
+  source: LLMEndpointSource;
+  /** Together these separate "unreachable", "reachable but publishes no
+   * metrics", and "working" — three states that otherwise all look like an
+   * endpoint with no data. */
+  last_scrape_at: string | null;
+  last_scrape_error: string | null;
+  model?: string | null;
+  created_at: string;
+}
+
 export interface LLMTarget {
   id: string;
   name: string;
@@ -269,6 +292,20 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ retention_days: retentionDays }),
     }),
+
+  listLLMEndpoints: () => request<LLMEndpoint[]>("/llm-endpoints"),
+  createLLMEndpoint: (body: {
+    host_id: string | null;
+    name: string;
+    url: string;
+    runtime: string;
+    api_key: string;
+  }) => request<LLMEndpoint>("/llm-endpoints", { method: "POST", body: JSON.stringify(body) }),
+  updateLLMEndpoint: (
+    id: string,
+    patch: { name?: string; runtime?: string; api_key?: string; enabled?: boolean },
+  ) => request<LLMEndpoint>(`/llm-endpoints/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteLLMEndpoint: (id: string) => request<void>(`/llm-endpoints/${id}`, { method: "DELETE" }),
 
   listLLMTargets: () => request<LLMTarget[]>("/llm-targets"),
   getLLMTarget: (id: string) =>

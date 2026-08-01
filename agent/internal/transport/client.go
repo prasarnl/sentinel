@@ -54,27 +54,40 @@ func Enroll(serverURL, enrollmentToken string, insecureSkipTLSVerify bool) (host
 	return out.HostID, out.APIKey, nil
 }
 
-// Push sends a batch of samples to the ingest endpoint.
-func (c *Client) Push(payload models.IngestPayload) error {
+// Push sends a batch of samples to the ingest endpoint and returns the
+// configuration the server sends back. The agent has no separate channel for
+// receiving settings, so the response to this push is how server-managed LLM
+// endpoints reach it.
+//
+// An older server returns an empty body; that decodes to a zero response and
+// is treated as "no server-managed configuration", leaving the agent on its
+// local config and autodetection.
+func (c *Client) Push(payload models.IngestPayload) (models.IngestResponse, error) {
+	var out models.IngestResponse
+
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return out, err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, c.serverURL+"/api/v1/ingest", bytes.NewReader(body))
 	if err != nil {
-		return err
+		return out, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return out, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
-		return fmt.Errorf("ingest failed: server returned %s", resp.Status)
+		return out, fmt.Errorf("ingest failed: server returned %s", resp.Status)
 	}
-	return nil
+
+	// A malformed or empty body is not worth failing the push over — the
+	// samples were accepted, which is the part that matters.
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return out, nil
 }

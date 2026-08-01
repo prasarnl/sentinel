@@ -1,11 +1,12 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { LayoutGrid, Server, Gauge, Users, Settings, LogOut, Activity } from "lucide-react";
+import { LayoutGrid, Server, Gauge, Boxes, Users, Settings, LogOut, Activity } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { cn } from "../lib/cn";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutGrid, end: true },
   { to: "/hosts", label: "Hosts", icon: Server },
+  { to: "/llm-endpoints", label: "LLM Endpoints", icon: Boxes },
   { to: "/llm-targets", label: "LLM Benchmarks", icon: Gauge },
   { to: "/users", label: "Users", icon: Users, adminOnly: true },
   { to: "/settings", label: "Settings", icon: Settings, adminOnly: true },

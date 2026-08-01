@@ -46,9 +46,54 @@ type llmState struct {
 	endpoints map[string]llmscrape.Endpoint
 	// negative records URLs probed and rejected, with when, for the TTL.
 	negative map[string]time.Time
+	// fromServer are endpoints the server manages for this host; they are
+	// always scraped, whatever discovery does or doesn't find.
+	fromServer map[string]llmscrape.Endpoint
+	// disabled are URLs an operator switched off. Discovery must respect
+	// these or it would immediately rediscover and resume something that was
+	// deliberately turned off.
+	disabled map[string]bool
 
 	lastDiscovery time.Time
 	discovering   bool
+}
+
+// SetServerEndpoints applies the LLM configuration the server returned from
+// the last ingest. Called from the push path, so it must not block.
+func (c *Collector) SetServerEndpoints(endpoints []models.AgentLLMEndpoint, disabled []string) {
+	c.llm.mu.Lock()
+	defer c.llm.mu.Unlock()
+
+	c.llm.fromServer = make(map[string]llmscrape.Endpoint, len(endpoints))
+	for _, ep := range endpoints {
+		url := strings.TrimSuffix(strings.TrimSpace(ep.URL), "/")
+		if url == "" {
+			continue
+		}
+		c.llm.fromServer[url] = llmscrape.Endpoint{URL: url, Runtime: ep.Runtime, APIKey: ep.APIKey}
+	}
+
+	c.llm.disabled = make(map[string]bool, len(disabled))
+	for _, url := range disabled {
+		url = strings.TrimSuffix(strings.TrimSpace(url), "/")
+		c.llm.disabled[url] = true
+		// Drop it immediately rather than waiting for the next discovery
+		// sweep, so disabling takes effect on the very next tick.
+		delete(c.llm.endpoints, url)
+	}
+}
+
+// DiscoveredEndpoints reports what is currently being scraped, so the server
+// can register autodetected endpoints and show them in the UI.
+func (c *Collector) DiscoveredEndpoints() []models.DiscoveredLLMEndpoint {
+	c.llm.mu.Lock()
+	defer c.llm.mu.Unlock()
+
+	out := make([]models.DiscoveredLLMEndpoint, 0, len(c.llm.endpoints))
+	for url, ep := range c.llm.endpoints {
+		out = append(out, models.DiscoveredLLMEndpoint{URL: url, Runtime: ep.Runtime})
+	}
+	return out
 }
 
 // collectLLM scrapes every known inference endpoint and returns normalized
@@ -60,8 +105,26 @@ func (c *Collector) collectLLM(now time.Time) []models.LLMSample {
 	c.maybeDiscover(now)
 
 	c.llm.mu.Lock()
-	endpoints := make([]llmscrape.Endpoint, 0, len(c.llm.endpoints))
-	for _, ep := range c.llm.endpoints {
+	endpoints := make([]llmscrape.Endpoint, 0, len(c.llm.endpoints)+len(c.llm.fromServer))
+	for url, ep := range c.llm.endpoints {
+		if c.llm.disabled[url] {
+			continue
+		}
+		endpoints = append(endpoints, ep)
+	}
+	// Server-managed endpoints are scraped even if discovery never saw them —
+	// they may be bound somewhere socket enumeration can't reach, or simply
+	// have been down during the last sweep. Their config also wins, since it
+	// carries an operator-set runtime and API key.
+	for url, ep := range c.llm.fromServer {
+		if _, alreadyQueued := c.llm.endpoints[url]; alreadyQueued {
+			for i := range endpoints {
+				if endpoints[i].URL == url {
+					endpoints[i] = ep
+				}
+			}
+			continue
+		}
 		endpoints = append(endpoints, ep)
 	}
 	c.llm.mu.Unlock()
@@ -217,6 +280,9 @@ func (c *Collector) probeCandidates(now time.Time) []string {
 
 		url := fmt.Sprintf("http://127.0.0.1:%d", conn.Laddr.Port)
 		if _, active := c.llm.endpoints[url]; active {
+			continue
+		}
+		if c.llm.disabled[url] {
 			continue
 		}
 		if rejectedAt, ok := c.llm.negative[url]; ok && now.Sub(rejectedAt) < negativeTTL {
