@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Boxes, Plus, Trash2, Radio } from "lucide-react";
+import { Boxes, Plus, Trash2, Radio, Gauge } from "lucide-react";
 import { api, type Host, type LLMEndpoint, type LLMTarget } from "../lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { Button } from "../components/ui/Button";
@@ -52,6 +52,7 @@ function EndpointRow({
 }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
+  const [benchmarking, setBenchmarking] = useState(false);
   const status = scrapeStatus(endpoint);
 
   async function toggle() {
@@ -85,7 +86,8 @@ function EndpointRow({
   }
 
   return (
-    <div className="flex items-center gap-3 border-b border-[var(--border)] py-2.5 last:border-b-0">
+    <div className="border-b border-[var(--border)] py-2.5 last:border-b-0">
+    <div className="flex items-center gap-3">
       <button
         onClick={() => navigate(`/llm-endpoints/${endpoint.id}`)}
         className="min-w-0 flex-1 cursor-pointer text-left"
@@ -111,6 +113,19 @@ function EndpointRow({
 
       {isAdmin && (
         <div className="flex shrink-0 items-center gap-1">
+          {endpoint.benchmark_target_id ? (
+            <Button
+              variant="secondary"
+              onClick={() => navigate(`/llm-targets/${endpoint.benchmark_target_id}`)}
+              title={`Already a benchmark target: ${endpoint.benchmark_target_name}`}
+            >
+              <Gauge size={14} /> Benchmarks
+            </Button>
+          ) : (
+            <Button variant="secondary" onClick={() => setBenchmarking((v) => !v)}>
+              <Gauge size={14} /> Benchmark
+            </Button>
+          )}
           <Button variant="secondary" onClick={toggle} disabled={busy}>
             {endpoint.enabled ? "Disable" : "Enable"}
           </Button>
@@ -125,6 +140,108 @@ function EndpointRow({
         </div>
       )}
     </div>
+      {benchmarking && (
+        <BenchmarkFromEndpoint endpoint={endpoint} onDone={() => setBenchmarking(false)} />
+      )}
+    </div>
+  );
+}
+
+/** Registers a monitored endpoint as a benchmark target, so it never has to be
+ * entered twice.
+ *
+ * The URL is pre-filled but editable: an agent scrapes its own host over
+ * loopback, so the monitored address usually isn't one the Sentinel server can
+ * reach. The suggestion swaps loopback for the host's name, which is a good
+ * guess and not a guarantee — hence the probe. */
+function BenchmarkFromEndpoint({ endpoint, onDone }: { endpoint: LLMEndpoint; onDone: () => void }) {
+  const navigate = useNavigate();
+  const [name, setName] = useState(endpoint.name || endpoint.model || endpoint.url);
+  const [url, setUrl] = useState(endpoint.benchmark_url);
+  const [probe, setProbe] = useState<{ reachable: boolean; models?: string[]; error?: string } | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Probe on open and whenever the URL settles, so the answer is already
+  // there rather than behind another click.
+  useEffect(() => {
+    if (!url) return;
+    setProbe(null);
+    setProbing(true);
+    const t = setTimeout(() => {
+      api
+        .probeBenchmarkURL(endpoint.id, url)
+        .then(setProbe)
+        .catch((e) => setProbe({ reachable: false, error: e instanceof Error ? e.message : "probe failed" }))
+        .finally(() => setProbing(false));
+    }, 500);
+    return () => clearTimeout(t);
+  }, [endpoint.id, url]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setSaving(true);
+    try {
+      const res = await api.createBenchmarkTargetFromEndpoint(endpoint.id, name, url);
+      navigate(`/llm-targets/${res.target_id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create target");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const loopbackSwapped = url !== endpoint.url;
+
+  return (
+    <form onSubmit={submit} className="mt-2 space-y-3 rounded-md border border-[var(--border)] p-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div>
+          <label className="mb-1 block text-xs text-[var(--text-secondary)]">Target name</label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} required />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-[var(--text-secondary)]">
+            URL the Sentinel server will benchmark
+          </label>
+          <Input value={url} onChange={(e) => setUrl(e.target.value)} required />
+        </div>
+      </div>
+
+      {loopbackSwapped && (
+        <p className="text-xs text-[var(--text-muted)]">
+          Monitored at <code>{endpoint.url}</code> — that's loopback on{" "}
+          {endpoint.host_name ?? "the host"}, so it can't be reached from here. Suggested the host's own
+          address instead; edit it if the server reaches that machine differently.
+        </p>
+      )}
+
+      <div className="text-xs">
+        {probing && <span className="text-[var(--text-muted)]">Checking…</span>}
+        {!probing && probe?.reachable && (
+          <span className="text-[var(--series-4)]">
+            Reachable — {probe.models?.length ?? 0} model{probe.models?.length === 1 ? "" : "s"} available
+            {probe.models?.length ? `: ${probe.models.slice(0, 3).join(", ")}${probe.models.length > 3 ? "…" : ""}` : ""}
+          </span>
+        )}
+        {!probing && probe && !probe.reachable && (
+          <span className="text-[var(--series-3)]">Not reachable — {probe.error}. You can still save it.</span>
+        )}
+      </div>
+
+      {error && <p className="text-xs text-[var(--series-6)]">{error}</p>}
+
+      <div className="flex gap-2">
+        <Button type="submit" disabled={saving || !url || !name}>
+          <Gauge size={14} /> Create benchmark target
+        </Button>
+        <Button variant="secondary" type="button" onClick={onDone}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 

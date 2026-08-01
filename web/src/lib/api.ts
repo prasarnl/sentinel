@@ -146,6 +146,14 @@ export interface LLMEndpoint {
   last_scrape_error: string | null;
   model?: string | null;
   created_at: string;
+  /** How the *server* would reach this endpoint, which differs from `url`
+   * whenever an agent scrapes it over loopback. A suggestion to confirm, not
+   * a verified address. */
+  benchmark_url: string;
+  /** Set when this address is already a benchmark target, so the UI links to
+   * it rather than offering to create a duplicate. */
+  benchmark_target_id: string | null;
+  benchmark_target_name: string | null;
 }
 
 export interface LLMTarget {
@@ -321,6 +329,18 @@ export const api = {
     patch: { name?: string; runtime?: string; api_key?: string; enabled?: boolean },
   ) => request<LLMEndpoint>(`/llm-endpoints/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteLLMEndpoint: (id: string) => request<void>(`/llm-endpoints/${id}`, { method: "DELETE" }),
+  // Probing and target creation run server-side because the endpoint's API
+  // key is never sent to the browser — only has_api_key is.
+  probeBenchmarkURL: (id: string, baseUrl: string) =>
+    request<{ reachable: boolean; models?: string[]; error?: string }>(
+      `/llm-endpoints/${id}/benchmark-probe`,
+      { method: "POST", body: JSON.stringify({ base_url: baseUrl }) },
+    ),
+  createBenchmarkTargetFromEndpoint: (id: string, name: string, baseUrl: string) =>
+    request<{ target_id: string; name: string; already_existed: boolean }>(
+      `/llm-endpoints/${id}/benchmark-target`,
+      { method: "POST", body: JSON.stringify({ name, base_url: baseUrl }) },
+    ),
 
   listLLMTargets: () => request<LLMTarget[]>("/llm-targets"),
   getLLMTarget: (id: string) =>

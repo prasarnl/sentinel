@@ -155,6 +155,16 @@ type LLMEndpoint struct {
 	// Model is the most recently observed model name, for display.
 	Model     *string   `json:"model,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// BenchmarkURL is how the server would reach this endpoint, which differs
+	// from URL whenever an agent scrapes it over loopback. A suggestion only,
+	// meant to be confirmed before use.
+	BenchmarkURL string `json:"benchmark_url"`
+	// BenchmarkTargetID is set when this address is already registered as a
+	// benchmark target, so the UI can link to it instead of offering to
+	// create a duplicate.
+	BenchmarkTargetID   *string `json:"benchmark_target_id"`
+	BenchmarkTargetName *string `json:"benchmark_target_name"`
 }
 
 // LLMTarget is an OpenAI-compatible inference endpoint the server can run
@@ -173,14 +183,14 @@ type LLMTarget struct {
 // LLMBenchmarkConfig holds the saved, editable parameters for benchmark
 // runs against a target. One row per target.
 type LLMBenchmarkConfig struct {
-	TargetID             string    `json:"target_id"`
-	Concurrency          int       `json:"concurrency"`
-	NumRequests          int       `json:"num_requests"`
-	WarmupRequests       int       `json:"warmup_requests"`
-	PromptTokens         int       `json:"prompt_tokens"`
-	MaxTokens            int       `json:"max_tokens"`
-	RequestTimeoutSecs   int       `json:"request_timeout_secs"`
-	ModelLoadTimeoutSecs int       `json:"model_load_timeout_secs"`
+	TargetID             string `json:"target_id"`
+	Concurrency          int    `json:"concurrency"`
+	NumRequests          int    `json:"num_requests"`
+	WarmupRequests       int    `json:"warmup_requests"`
+	PromptTokens         int    `json:"prompt_tokens"`
+	MaxTokens            int    `json:"max_tokens"`
+	RequestTimeoutSecs   int    `json:"request_timeout_secs"`
+	ModelLoadTimeoutSecs int    `json:"model_load_timeout_secs"`
 	// ContextWindow/BatchSize are optional, best-effort: sent as extra
 	// n_ctx/n_batch fields on each request. Most llama.cpp-family servers
 	// fix these at process launch, so whether they have any effect

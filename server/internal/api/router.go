@@ -79,6 +79,8 @@ func (s *Server) Router() (http.Handler, error) {
 				r.Delete("/users/{id}", s.DeleteUser)
 
 				r.Post("/llm-endpoints", s.CreateLLMEndpoint)
+				r.Post("/llm-endpoints/{id}/benchmark-probe", s.ProbeEndpointBenchmarkURL)
+				r.Post("/llm-endpoints/{id}/benchmark-target", s.CreateBenchmarkTargetFromEndpoint)
 				r.Patch("/llm-endpoints/{id}", s.UpdateLLMEndpoint)
 				r.Delete("/llm-endpoints/{id}", s.DeleteLLMEndpoint)
 

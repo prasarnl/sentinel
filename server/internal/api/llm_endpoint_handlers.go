@@ -27,7 +27,34 @@ func scanLLMEndpoint(row pgx.Row) (models.LLMEndpoint, error) {
 	err := row.Scan(&e.ID, &e.HostID, &e.HostName, &e.Name, &e.URL, &e.Runtime, &e.APIKey,
 		&e.Enabled, &e.Source, &e.LastScrapeAt, &e.LastScrapeError, &e.CreatedAt, &e.Model)
 	e.HasAPIKey = e.APIKey != nil && *e.APIKey != ""
+	e.BenchmarkURL = benchmarkURLFor(e.URL, e.HostName)
 	return e, err
+}
+
+// annotateBenchmarkTargets marks endpoints whose server-reachable address is
+// already a benchmark target, so the UI links to it rather than offering to
+// create a second one for the same server.
+func (s *Server) annotateBenchmarkTargets(ctx context.Context, endpoints []models.LLMEndpoint) {
+	rows, err := s.Pool.Query(ctx, `SELECT id, name, base_url FROM llm_targets`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	byURL := map[string][2]string{}
+	for rows.Next() {
+		var id, name, baseURL string
+		if rows.Scan(&id, &name, &baseURL) == nil {
+			byURL[strings.TrimSuffix(baseURL, "/")] = [2]string{id, name}
+		}
+	}
+	for i := range endpoints {
+		if hit, ok := byURL[strings.TrimSuffix(endpoints[i].BenchmarkURL, "/")]; ok {
+			id, name := hit[0], hit[1]
+			endpoints[i].BenchmarkTargetID = &id
+			endpoints[i].BenchmarkTargetName = &name
+		}
+	}
 }
 
 func (s *Server) ListLLMEndpoints(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +79,7 @@ func (s *Server) ListLLMEndpoints(w http.ResponseWriter, r *http.Request) {
 		}
 		endpoints = append(endpoints, e)
 	}
+	s.annotateBenchmarkTargets(r.Context(), endpoints)
 	writeJSON(w, http.StatusOK, endpoints)
 }
 
