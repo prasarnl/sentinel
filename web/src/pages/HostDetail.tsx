@@ -8,6 +8,7 @@ import { Select } from "../components/ui/Select";
 import { StatusBadge } from "../components/StatusBadge";
 import { HistoryChart } from "../components/HistoryChart";
 import { LLMRuntimePanel } from "../components/LLMRuntimePanel";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { formatBytes, formatBytesPerSec, formatPct, formatRelativeTime } from "../lib/format";
 
 const RANGES = [
@@ -211,7 +212,11 @@ export function HostDetail() {
       </div>
 
       {snapshot.llm && snapshot.llm.length > 0 && id && (
-        <LLMRuntimePanel hostId={id} range={range} samples={snapshot.llm} />
+        <div className="mt-4">
+          <ErrorBoundary label="LLM runtime panel">
+            <LLMRuntimePanel hostId={id} range={range} samples={snapshot.llm} />
+          </ErrorBoundary>
+        </div>
       )}
     </div>
   );

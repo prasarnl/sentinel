@@ -12,7 +12,14 @@ import {
   SPEC_DECODE_COLOR,
 } from "./LLMCharts";
 import { StatTile } from "./StatTile";
-import { formatCount, formatMillis, formatRatioPct, formatTokensPerSec } from "../lib/format";
+import {
+  formatCount,
+  formatFixed,
+  formatMillis,
+  formatPerSec,
+  formatRatioPct,
+  formatTokensPerSec,
+} from "../lib/format";
 
 export function LLMRuntimePanel({
   hostId,
@@ -78,7 +85,7 @@ export function LLMRuntimePanel({
   const runtimeLabel = current.runtime === "vllm" ? "vLLM" : "llama.cpp";
 
   return (
-    <div className="mt-4">
+    <div>
       <Card>
         <CardHeader>
           <div className="flex min-w-0 items-center gap-2">
@@ -128,20 +135,14 @@ export function LLMRuntimePanel({
             <StatTile
               label="Requests running"
               value={formatCount(current.requests_running)}
-              hint={
-                current.requests_waiting === null ? undefined : `${current.requests_waiting} waiting`
-              }
+              hint={current.requests_waiting == null ? undefined : `${current.requests_waiting} waiting`}
               color={RUNNING_COLOR}
             />
             <StatTile label="Time to first token" value={formatMillis(current.ttft_ms_avg)} />
             <StatTile label="Per output token" value={formatMillis(current.tpot_ms_avg)} />
             <StatTile
               label="Preemptions"
-              value={
-                current.preemptions_per_sec === null
-                  ? null
-                  : `${current.preemptions_per_sec.toFixed(2)}/s`
-              }
+              value={formatPerSec(current.preemptions_per_sec)}
               hint={current.preemptions_per_sec ? "cache oversubscribed" : undefined}
             />
           </div>
@@ -149,8 +150,8 @@ export function LLMRuntimePanel({
           {/* Only rendered when the runtime is actually speculating, rather
               than sitting there as two permanent n/a tiles on the servers
               that aren't. */}
-          {(current.spec_decode_acceptance_rate !== null ||
-            current.spec_decode_accepted_per_draft !== null) && (
+          {(current.spec_decode_acceptance_rate != null ||
+            current.spec_decode_accepted_per_draft != null) && (
             <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <StatTile
                 label="Draft acceptance"
@@ -160,11 +161,7 @@ export function LLMRuntimePanel({
               />
               <StatTile
                 label="Accepted per draft"
-                value={
-                  current.spec_decode_accepted_per_draft === null
-                    ? null
-                    : current.spec_decode_accepted_per_draft.toFixed(2)
-                }
+                value={formatFixed(current.spec_decode_accepted_per_draft)}
                 hint="compare to num_speculative_tokens"
               />
             </div>

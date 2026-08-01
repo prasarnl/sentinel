@@ -12,6 +12,48 @@ export interface IngestEvent {
   };
 }
 
+/** Metric fields that are absent rather than null on the websocket.
+ *
+ * The REST snapshot builds its rows explicitly, so an unset metric arrives as
+ * null. Websocket frames are the Go LLMSample struct, whose fields are tagged
+ * omitempty — a nil metric is omitted from the JSON entirely and arrives as
+ * undefined. Consumers declared these as `number | null`, so a strict
+ * `=== null` check passed straight through an absent field and the next
+ * property access threw, blanking the page a couple of seconds after load.
+ *
+ * Filling them in here keeps that difference at the boundary and makes the
+ * declared types true, rather than asking every consumer to remember it. */
+const NULLABLE_LLM_FIELDS = [
+  "model",
+  "kv_cache_usage_ratio",
+  "kv_cache_tokens",
+  "prompt_tokens_total",
+  "generated_tokens_total",
+  "prompt_tokens_per_sec",
+  "generated_tokens_per_sec",
+  "prefix_cache_queries_total",
+  "prefix_cache_hits_total",
+  "prefix_cache_hit_ratio",
+  "requests_running",
+  "requests_waiting",
+  "ttft_ms_avg",
+  "tpot_ms_avg",
+  "preemptions_per_sec",
+  "spec_decode_acceptance_rate",
+  "spec_decode_accepted_per_draft",
+  "quantization",
+  "context_length",
+  "max_context_length",
+] as const;
+
+function normalizeLLMPoint(point: LLMPoint): LLMPoint {
+  const out: Record<string, unknown> = { ...point };
+  for (const field of NULLABLE_LLM_FIELDS) {
+    if (out[field] === undefined) out[field] = null;
+  }
+  return out as unknown as LLMPoint;
+}
+
 /** Subscribes to live ingest events for a host over WebSocket, reconnecting
  * with backoff if the connection drops. */
 export function useHostStream(hostId: string | null, onEvent: (evt: IngestEvent) => void) {
@@ -33,6 +75,7 @@ export function useHostStream(hostId: string | null, onEvent: (evt: IngestEvent)
       socket.onmessage = (msg) => {
         try {
           const evt = JSON.parse(msg.data) as IngestEvent;
+          if (evt.payload?.llm) evt.payload.llm = evt.payload.llm.map(normalizeLLMPoint);
           onEventRef.current(evt);
         } catch {
           // ignore malformed frames

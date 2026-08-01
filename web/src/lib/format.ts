@@ -53,6 +53,16 @@ export function formatCount(value: number | null | undefined): string | null {
   return `${Math.round(value)}`;
 }
 
+export function formatPerSec(value: number | null | undefined, digits = 2): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return `${value.toFixed(digits)}/s`;
+}
+
+export function formatFixed(value: number | null | undefined, digits = 2): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return value.toFixed(digits);
+}
+
 export function formatClockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
