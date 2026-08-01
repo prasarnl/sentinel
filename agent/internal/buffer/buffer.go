@@ -16,15 +16,22 @@ func New() *Buffer {
 	return &Buffer{}
 }
 
+// Add buffers one tick's samples. Every slice on IngestPayload must be
+// handled here — a family that is collected but not appended is discarded
+// silently, with no error anywhere to trace it back from. See
+// TestAddCarriesEveryPayloadField, which fails if a new family is added to
+// IngestPayload without being wired in here.
 func (b *Buffer) Add(p models.IngestPayload) {
 	b.payload.CPU = appendBounded(b.payload.CPU, p.CPU...)
 	b.payload.Mem = appendBounded(b.payload.Mem, p.Mem...)
 	b.payload.Disk = appendBounded(b.payload.Disk, p.Disk...)
 	b.payload.GPU = appendBounded(b.payload.GPU, p.GPU...)
+	b.payload.LLM = appendBounded(b.payload.LLM, p.LLM...)
 }
 
 func (b *Buffer) IsEmpty() bool {
-	return len(b.payload.CPU) == 0 && len(b.payload.Mem) == 0 && len(b.payload.Disk) == 0 && len(b.payload.GPU) == 0
+	return len(b.payload.CPU) == 0 && len(b.payload.Mem) == 0 &&
+		len(b.payload.Disk) == 0 && len(b.payload.GPU) == 0 && len(b.payload.LLM) == 0
 }
 
 func (b *Buffer) Snapshot() models.IngestPayload {
