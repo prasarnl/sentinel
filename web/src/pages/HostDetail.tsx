@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card"
 import { Select } from "../components/ui/Select";
 import { StatusBadge } from "../components/StatusBadge";
 import { HistoryChart } from "../components/HistoryChart";
+import { LLMRuntimePanel } from "../components/LLMRuntimePanel";
 import { formatBytes, formatBytesPerSec, formatPct, formatRelativeTime } from "../lib/format";
 
 const RANGES = [
@@ -83,6 +84,7 @@ export function HostDetail() {
       mem: memPoint ?? prev.mem,
       disk: evt.payload.disk ?? prev.disk,
       gpu: evt.payload.gpu ?? prev.gpu,
+      llm: evt.payload.llm ?? prev.llm,
     }));
     if (cpuPoint) {
       setCpuData((prev) => [...prev, { time: cpuPoint.time, usage_pct: cpuPoint.usage_pct }].slice(-500));
@@ -207,6 +209,10 @@ export function HostDetail() {
           </Card>
         )}
       </div>
+
+      {snapshot.llm && snapshot.llm.length > 0 && id && (
+        <LLMRuntimePanel hostId={id} range={range} samples={snapshot.llm} />
+      )}
     </div>
   );
 }

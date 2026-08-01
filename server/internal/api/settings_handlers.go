@@ -20,7 +20,7 @@ type updateSettingsRequest struct {
 	RetentionDays int `json:"retention_days"`
 }
 
-var retentionTables = []string{"metrics_cpu", "metrics_mem", "metrics_disk", "metrics_gpu"}
+var retentionTables = []string{"metrics_cpu", "metrics_mem", "metrics_disk", "metrics_gpu", "metrics_llm"}
 
 func (s *Server) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req updateSettingsRequest

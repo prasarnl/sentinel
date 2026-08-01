@@ -1,12 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { Monitor, Cpu, MemoryStick, HardDrive, Server as ServerIcon } from "lucide-react";
+import { Monitor, Cpu, MemoryStick, HardDrive, Boxes, Server as ServerIcon } from "lucide-react";
 import { api, type Host, type LatestSnapshot } from "../lib/api";
 import { useHostStream, type IngestEvent } from "../lib/useHostStream";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
 import { StatusBadge } from "../components/StatusBadge";
 import { Sparkline } from "../components/Sparkline";
-import { formatBytes, formatPct, formatRelativeTime } from "../lib/format";
+import { formatBytes, formatPct, formatRatioPct, formatRelativeTime } from "../lib/format";
 
 const MAX_POINTS = 40;
 
@@ -48,6 +48,7 @@ function HostCard({ host }: { host: Host }) {
       mem: memPoint ?? prev.mem,
       disk: diskPoints ?? prev.disk,
       gpu: gpuPoints ?? prev.gpu,
+      llm: evt.payload.llm ?? prev.llm,
     }));
 
     if (cpuPoint) {
@@ -65,6 +66,8 @@ function HostCard({ host }: { host: Host }) {
   useHostStream(host.status !== "removed" ? host.id : null, onEvent);
 
   const primaryDisk = snapshot.disk?.[0];
+  // Only shown when an inference runtime is actually reporting on this host.
+  const kvCache = formatRatioPct(snapshot.llm?.[0]?.kv_cache_usage_ratio);
 
   return (
     <Card
@@ -114,6 +117,12 @@ function HostCard({ host }: { host: Host }) {
             <div className="flex items-center gap-1.5">
               <ServerIcon size={12} />
               GPU {formatPct(snapshot.gpu[0].utilization_pct)}
+            </div>
+          )}
+          {kvCache && (
+            <div className="flex items-center gap-1.5" title="LLM KV cache used">
+              <Boxes size={12} />
+              KV {kvCache}
             </div>
           )}
         </div>

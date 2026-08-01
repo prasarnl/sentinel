@@ -72,7 +72,69 @@ func (s *Server) LatestSnapshot(w http.ResponseWriter, r *http.Request) {
 		result["gpu"] = gpus
 	}
 
+	llmRows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT ON (endpoint) `+llmColumns+`
+		FROM metrics_llm WHERE host_id = $1 ORDER BY endpoint, time DESC`, hostID)
+	if err == nil {
+		defer llmRows.Close()
+		llms := []map[string]any{}
+		for llmRows.Next() {
+			if llm := scanLLM(llmRows); llm != nil {
+				llms = append(llms, llm)
+			}
+		}
+		result["llm"] = llms
+	}
+
 	writeJSON(w, http.StatusOK, result)
+}
+
+// llmColumns is shared by the snapshot and raw-history queries so the two
+// stay in step with scanLLM's field order.
+const llmColumns = `time, endpoint, runtime, model,
+	kv_cache_usage_ratio, kv_cache_tokens,
+	prompt_tokens_total, generated_tokens_total,
+	prompt_tokens_per_sec, generated_tokens_per_sec,
+	prefix_cache_queries_total, prefix_cache_hits_total, prefix_cache_hit_ratio,
+	requests_running, requests_waiting,
+	ttft_ms_avg, tpot_ms_avg, preemptions_per_sec`
+
+// scanLLM reads one metrics_llm row. Nullable metrics stay nil in the JSON so
+// the dashboard can hide a tile the runtime cannot report, rather than
+// showing a misleading zero.
+func scanLLM(rows pgx.Rows) map[string]any {
+	var (
+		t                             time.Time
+		endpoint, runtime             string
+		model                         *string
+		kvRatio                       *float64
+		kvTokens                      *int64
+		promptTotal, genTotal         *int64
+		promptPerSec, genPerSec       *float64
+		prefixQueries, prefixHits     *int64
+		prefixRatio                   *float64
+		running, waiting              *int
+		ttft, tpot, preemptionsPerSec *float64
+	)
+	if rows.Scan(&t, &endpoint, &runtime, &model,
+		&kvRatio, &kvTokens,
+		&promptTotal, &genTotal,
+		&promptPerSec, &genPerSec,
+		&prefixQueries, &prefixHits, &prefixRatio,
+		&running, &waiting,
+		&ttft, &tpot, &preemptionsPerSec) != nil {
+		return nil
+	}
+	return map[string]any{
+		"time": t, "endpoint": endpoint, "runtime": runtime, "model": model,
+		"kv_cache_usage_ratio": kvRatio, "kv_cache_tokens": kvTokens,
+		"prompt_tokens_total": promptTotal, "generated_tokens_total": genTotal,
+		"prompt_tokens_per_sec": promptPerSec, "generated_tokens_per_sec": genPerSec,
+		"prefix_cache_queries_total": prefixQueries, "prefix_cache_hits_total": prefixHits,
+		"prefix_cache_hit_ratio": prefixRatio,
+		"requests_running":       running, "requests_waiting": waiting,
+		"ttft_ms_avg": ttft, "tpot_ms_avg": tpot, "preemptions_per_sec": preemptionsPerSec,
+	}
 }
 
 func scanCPU(row pgx.Row) map[string]any {
@@ -251,6 +313,64 @@ func (s *Server) HistoryDisk(w http.ResponseWriter, r *http.Request) {
 			if rows.Scan(&p.Time, &p.UsedBytes, &p.TotalBytes, &p.ReadBytesSec, &p.WriteBytesSec) == nil {
 				points = append(points, p)
 			}
+		}
+	}
+	writeJSON(w, http.StatusOK, points)
+}
+
+// HistoryLLM returns inference-runtime history for one endpoint on a host.
+// Counts are cast to float8 so raw rows and the averaged 1-minute rollups
+// share a single point shape, as HistoryGPU does for byte counters.
+func (s *Server) HistoryLLM(w http.ResponseWriter, r *http.Request) {
+	hostID := chi.URLParam(r, "id")
+	endpoint := r.URL.Query().Get("endpoint")
+	if endpoint == "" {
+		writeError(w, http.StatusBadRequest, "endpoint query parameter is required")
+		return
+	}
+	rng := parseRange(r)
+	since := time.Now().Add(-rng)
+	ctx := r.Context()
+
+	type point struct {
+		Time                  time.Time `json:"time"`
+		KVCacheUsageRatio     *float64  `json:"kv_cache_usage_ratio"`
+		PromptTokensPerSec    *float64  `json:"prompt_tokens_per_sec"`
+		GeneratedTokensPerSec *float64  `json:"generated_tokens_per_sec"`
+		PrefixCacheHitRatio   *float64  `json:"prefix_cache_hit_ratio"`
+		RequestsRunning       *float64  `json:"requests_running"`
+		RequestsWaiting       *float64  `json:"requests_waiting"`
+		TTFTMsAvg             *float64  `json:"ttft_ms_avg"`
+		TPOTMsAvg             *float64  `json:"tpot_ms_avg"`
+		PreemptionsPerSec     *float64  `json:"preemptions_per_sec"`
+	}
+	points := []point{}
+
+	query := `SELECT time, kv_cache_usage_ratio, prompt_tokens_per_sec, generated_tokens_per_sec,
+			prefix_cache_hit_ratio, requests_running::float8, requests_waiting::float8,
+			ttft_ms_avg, tpot_ms_avg, preemptions_per_sec
+		FROM metrics_llm WHERE host_id = $1 AND endpoint = $2 AND time >= $3 ORDER BY time`
+	if rng > rawCutoff {
+		// avg() over the INT request counts yields numeric, so it is cast
+		// back to float8 to match the point shape the raw branch produces.
+		query = `SELECT bucket, avg_kv_cache_usage_ratio, avg_prompt_tokens_per_sec, avg_generated_tokens_per_sec,
+				avg_prefix_cache_hit_ratio, avg_requests_running::float8, avg_requests_waiting::float8,
+				avg_ttft_ms, avg_tpot_ms, avg_preemptions_per_sec
+			FROM metrics_llm_1m WHERE host_id = $1 AND endpoint = $2 AND bucket >= $3 ORDER BY bucket`
+	}
+
+	rows, err := s.Pool.Query(ctx, query, hostID, endpoint, since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p point
+		if rows.Scan(&p.Time, &p.KVCacheUsageRatio, &p.PromptTokensPerSec, &p.GeneratedTokensPerSec,
+			&p.PrefixCacheHitRatio, &p.RequestsRunning, &p.RequestsWaiting,
+			&p.TTFTMsAvg, &p.TPOTMsAvg, &p.PreemptionsPerSec) == nil {
+			points = append(points, p)
 		}
 	}
 	writeJSON(w, http.StatusOK, points)

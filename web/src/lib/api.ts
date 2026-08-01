@@ -61,11 +61,55 @@ export interface GPUPoint {
   temp_c: number | null;
 }
 
+export type LLMRuntime = "llamacpp" | "vllm";
+
+/** One scrape of an inference runtime's metrics endpoint on a host.
+ *
+ * Every metric is nullable, and null means "this runtime cannot report it"
+ * rather than zero — llama.cpp exposes no prefix-cache or preemption
+ * counters, so those read as n/a instead of 0. */
+export interface LLMPoint {
+  time: string;
+  endpoint: string;
+  runtime: LLMRuntime;
+  model: string | null;
+  kv_cache_usage_ratio: number | null; // 0..1
+  kv_cache_tokens: number | null;
+  prompt_tokens_total: number | null;
+  generated_tokens_total: number | null;
+  prompt_tokens_per_sec: number | null;
+  generated_tokens_per_sec: number | null;
+  prefix_cache_queries_total: number | null;
+  prefix_cache_hits_total: number | null;
+  prefix_cache_hit_ratio: number | null; // 0..1, over the last scrape window
+  requests_running: number | null;
+  requests_waiting: number | null;
+  ttft_ms_avg: number | null;
+  tpot_ms_avg: number | null;
+  preemptions_per_sec: number | null;
+}
+
+/** A history sample. Counts come back as floats because long ranges are
+ * served from the 1-minute rollups, where they are averages. */
+export interface LLMHistoryPoint {
+  time: string;
+  kv_cache_usage_ratio: number | null;
+  prompt_tokens_per_sec: number | null;
+  generated_tokens_per_sec: number | null;
+  prefix_cache_hit_ratio: number | null;
+  requests_running: number | null;
+  requests_waiting: number | null;
+  ttft_ms_avg: number | null;
+  tpot_ms_avg: number | null;
+  preemptions_per_sec: number | null;
+}
+
 export interface LatestSnapshot {
   cpu?: CPUPoint;
   mem?: MemPoint;
   disk?: DiskPoint[];
   gpu?: GPUPoint[];
+  llm?: LLMPoint[];
 }
 
 export interface LLMTarget {
@@ -207,6 +251,10 @@ export const api = {
     request<
       { time: string; utilization_pct: number | null; mem_used_bytes: number | null; mem_total_bytes: number | null; temp_c: number | null }[]
     >(`/hosts/${hostId}/history/gpu?range=${range}&gpu_index=${gpuIndex}`),
+  historyLLM: (hostId: string, endpoint: string, range: string) =>
+    request<LLMHistoryPoint[]>(
+      `/hosts/${hostId}/history/llm?range=${range}&endpoint=${encodeURIComponent(endpoint)}`,
+    ),
 
   listUsers: () => request<User[]>("/users"),
   createUser: (username: string, password: string, role: Role) =>

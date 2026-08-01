@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { CPUPoint, DiskPoint, GPUPoint, MemPoint } from "./api";
+import type { CPUPoint, DiskPoint, GPUPoint, LLMPoint, MemPoint } from "./api";
 
 export interface IngestEvent {
   host_id: string;
@@ -8,6 +8,7 @@ export interface IngestEvent {
     mem?: MemPoint[];
     disk?: DiskPoint[];
     gpu?: GPUPoint[];
+    llm?: LLMPoint[];
   };
 }
 

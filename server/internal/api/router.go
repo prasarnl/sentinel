@@ -53,6 +53,7 @@ func (s *Server) Router() (http.Handler, error) {
 			r.Get("/hosts/{id}/history/mem", s.HistoryMem)
 			r.Get("/hosts/{id}/history/disk", s.HistoryDisk)
 			r.Get("/hosts/{id}/history/gpu", s.HistoryGPU)
+			r.Get("/hosts/{id}/history/llm", s.HistoryLLM)
 			r.Get("/hosts/{id}/stream", s.StreamHost)
 
 			r.Get("/settings", s.GetSettings)

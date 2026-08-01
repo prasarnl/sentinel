@@ -14,6 +14,29 @@ type Config struct {
 	APIKey         string `yaml:"api_key"`
 	IntervalSecs   int    `yaml:"interval_seconds"`
 	InsecureSkipTLS bool  `yaml:"insecure_skip_tls_verify,omitempty"`
+	LLM            LLM    `yaml:"llm,omitempty"`
+}
+
+// LLM configures scraping of local inference runtimes (llama.cpp, vLLM) for
+// KV cache, throughput, and queue telemetry.
+type LLM struct {
+	// Autodetect probes well-known local inference ports. Defaults to true
+	// when the config file has no llm block at all, so existing installs
+	// pick the feature up without being edited.
+	Autodetect *bool         `yaml:"autodetect,omitempty"`
+	Endpoints  []LLMEndpoint `yaml:"endpoints,omitempty"`
+}
+
+type LLMEndpoint struct {
+	URL     string `yaml:"url"`               // base URL, e.g. http://127.0.0.1:8080
+	Runtime string `yaml:"runtime,omitempty"` // auto (default) | llamacpp | vllm
+	APIKey  string `yaml:"api_key,omitempty"` // optional bearer token for a protected /metrics
+}
+
+// AutodetectEnabled reports whether well-known ports should be probed,
+// applying the default-on behaviour for configs that omit the setting.
+func (l LLM) AutodetectEnabled() bool {
+	return l.Autodetect == nil || *l.Autodetect
 }
 
 // Path returns the platform-appropriate config file location.

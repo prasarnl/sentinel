@@ -27,6 +27,32 @@ export function formatRelativeTime(iso: string | null): string {
   return `${Math.floor(diffSec / 86400)}d ago`;
 }
 
+// The LLM formatters below return null rather than a dash when a value is
+// absent, so StatTile can distinguish "this runtime cannot report it" from a
+// real zero and render "n/a".
+
+/** Formats a 0..1 ratio as a percentage. */
+export function formatRatioPct(ratio: number | null | undefined): string | null {
+  if (ratio === null || ratio === undefined || !Number.isFinite(ratio)) return null;
+  return `${(ratio * 100).toFixed(1)}%`;
+}
+
+export function formatTokensPerSec(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} tok/s`;
+}
+
+export function formatMillis(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  if (value >= 1000) return `${(value / 1000).toFixed(2)} s`;
+  return `${Math.round(value)} ms`;
+}
+
+export function formatCount(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  return `${Math.round(value)}`;
+}
+
 export function formatClockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }

@@ -44,7 +44,7 @@ func (p *program) run() {
 
 	client := transport.New(cfg.ServerURL, cfg.APIKey, cfg.InsecureSkipTLS)
 	buf := buffer.New()
-	coll := collector.New()
+	coll := collector.New(cfg.LLM)
 
 	ticker := time.NewTicker(time.Duration(cfg.IntervalSecs) * time.Second)
 	defer ticker.Stop()
