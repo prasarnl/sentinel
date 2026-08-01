@@ -64,6 +64,8 @@ export function LLMRuntimePanel({
           ttft_ms_avg: current.ttft_ms_avg,
           tpot_ms_avg: current.tpot_ms_avg,
           preemptions_per_sec: current.preemptions_per_sec,
+          spec_decode_acceptance_rate: current.spec_decode_acceptance_rate,
+          spec_decode_accepted_per_draft: current.spec_decode_accepted_per_draft,
         },
       ].slice(-500);
     });
