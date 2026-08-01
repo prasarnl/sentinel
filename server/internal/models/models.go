@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"sentinel/llmscrape"
+)
 
 type Role string
 
@@ -82,37 +86,11 @@ type GPUSample struct {
 	TempC          *float64  `json:"temp_c,omitempty"`
 }
 
-// LLMSample is one scrape of an inference runtime's metrics endpoint on a
-// host, normalized by the agent across backends (llama.cpp, vLLM) so the
-// dashboard needn't know which is behind a given endpoint. Every metric is
-// optional: a runtime that doesn't expose one leaves it nil, which the UI
-// renders as "not measurable here" rather than as a real zero.
-type LLMSample struct {
-	Time     time.Time `json:"time"`
-	Endpoint string    `json:"endpoint"`
-	Runtime  string    `json:"runtime"` // llamacpp | vllm
-	Model    string    `json:"model,omitempty"`
-
-	KVCacheUsageRatio *float64 `json:"kv_cache_usage_ratio,omitempty"` // 0..1
-	KVCacheTokens     *int64   `json:"kv_cache_tokens,omitempty"`
-
-	PromptTokensTotal     *int64   `json:"prompt_tokens_total,omitempty"`
-	GeneratedTokensTotal  *int64   `json:"generated_tokens_total,omitempty"`
-	PromptTokensPerSec    *float64 `json:"prompt_tokens_per_sec,omitempty"`
-	GeneratedTokensPerSec *float64 `json:"generated_tokens_per_sec,omitempty"`
-
-	PrefixCacheQueriesTotal *int64   `json:"prefix_cache_queries_total,omitempty"`
-	PrefixCacheHitsTotal    *int64   `json:"prefix_cache_hits_total,omitempty"`
-	PrefixCacheHitRatio     *float64 `json:"prefix_cache_hit_ratio,omitempty"` // 0..1, windowed
-
-	RequestsRunning *int `json:"requests_running,omitempty"`
-	RequestsWaiting *int `json:"requests_waiting,omitempty"`
-
-	TTFTMsAvg *float64 `json:"ttft_ms_avg,omitempty"`
-	TPOTMsAvg *float64 `json:"tpot_ms_avg,omitempty"`
-
-	PreemptionsPerSec *float64 `json:"preemptions_per_sec,omitempty"`
-}
+// LLMSample is one scrape of an inference runtime's metrics endpoint,
+// normalized across backends (llama.cpp, vLLM). It is an alias rather than
+// a copy so the agent, the server, and the shared scraper cannot drift out
+// of sync on field names or JSON tags.
+type LLMSample = llmscrape.Sample
 
 type IngestPayload struct {
 	CPU  []CPUSample  `json:"cpu,omitempty"`

@@ -17,4 +17,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
+	sentinel/llmscrape v0.0.0
 )
+
+replace sentinel/llmscrape => ../llmscrape

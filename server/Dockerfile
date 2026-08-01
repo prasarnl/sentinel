@@ -10,6 +10,10 @@ RUN npm run build
 
 FROM golang:1.26-alpine AS agent-builder
 WORKDIR /app/agent
+# The shared llmscrape module is resolved through a `replace ../llmscrape`
+# directive, so it has to be in place before `go mod download` can resolve
+# the module graph.
+COPY llmscrape/ /app/llmscrape/
 COPY agent/go.mod agent/go.sum ./
 RUN go mod download
 COPY agent/ ./
@@ -20,6 +24,7 @@ RUN mkdir -p /out && \
 
 FROM golang:1.26-alpine AS server-builder
 WORKDIR /app/server
+COPY llmscrape/ /app/llmscrape/
 COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./

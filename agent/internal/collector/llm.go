@@ -1,74 +1,84 @@
 package collector
 
 import (
-	"encoding/json"
-	"io"
-	"net/http"
+	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 
-	"sentinel/agent/internal/config"
+	gopsnet "github.com/shirou/gopsutil/v3/net"
+
 	"sentinel/agent/internal/models"
+	"sentinel/llmscrape"
 )
 
 const (
-	runtimeLlamaCpp = "llamacpp"
-	runtimeVLLM     = "vllm"
+	// discoveryInterval is how often listening ports are re-examined for new
+	// inference servers.
+	discoveryInterval = 60 * time.Second
 
-	// probeInterval is how often endpoints that aren't currently reporting
-	// are retried, and how often a runtime's model name is refreshed (it can
-	// change under llama-swap without the endpoint changing).
-	probeInterval = 60 * time.Second
+	// negativeTTL is how long a port that answered but wasn't an inference
+	// runtime is left alone. Without this, every unrelated service on the box
+	// would be re-probed each cycle — a real cost on a host with dozens of
+	// listeners, and pointless traffic aimed at services that never asked
+	// for it.
+	negativeTTL = 10 * time.Minute
 
-	llmScrapeTimeout = 2 * time.Second
+	// Probes target loopback and should answer immediately, so they get a
+	// much tighter budget than a real scrape.
+	probeTimeout  = 1 * time.Second
+	scrapeTimeout = 3 * time.Second
+
+	// maxConcurrentProbes bounds a discovery sweep. A host can have many
+	// listening ports and probing them serially would take longer than the
+	// collection interval.
+	maxConcurrentProbes = 8
 )
 
-// autodetectTargets are the default listen addresses of the supported
-// runtimes. Probing is cheap (a 2s-timeout request to loopback, once a
-// minute) so a host with no inference server pays essentially nothing.
-var autodetectTargets = []string{
-	"http://127.0.0.1:8080", // llama.cpp / llama-swap
-	"http://127.0.0.1:8000", // vLLM
+// llmState holds everything discovery and scraping share. Discovery runs off
+// the collection goroutine so a slow sweep never delays the tick that reports
+// CPU/memory/disk/GPU, so access is guarded.
+type llmState struct {
+	mu sync.Mutex
+
+	// endpoints currently believed to serve inference metrics, keyed by URL.
+	endpoints map[string]llmscrape.Endpoint
+	// negative records URLs probed and rejected, with when, for the TTL.
+	negative map[string]time.Time
+
+	lastDiscovery time.Time
+	discovering   bool
 }
 
-// llmCounterState holds the cumulative counters from an endpoint's previous
-// scrape, so per-second rates and windowed ratios can be derived. Same
-// approach as diskIOState.
-type llmCounterState struct {
-	promptTokens  float64
-	genTokens     float64
-	prefixQueries float64
-	prefixHits    float64
-	preemptions   float64
-	ttftSum       float64
-	ttftCount     float64
-	tpotSum       float64
-	tpotCount     float64
-	at            time.Time
-}
-
-// llmEndpointState tracks one endpoint the agent scrapes.
-type llmEndpointState struct {
-	cfg          config.LLMEndpoint
-	autodetected bool   // autodetected endpoints are dropped when they stop responding, so they get re-probed
-	model        string // cached; refreshed every probeInterval
-	modelAt      time.Time
-}
-
-// collectLLM scrapes every known inference endpoint and normalizes the result.
-// Like GPU collection, it is entirely best-effort: an endpoint that is down,
-// unreachable, or serving something unrecognized simply contributes no sample.
+// collectLLM scrapes every known inference endpoint and returns normalized
+// samples. Like GPU collection it is entirely best-effort: an endpoint that
+// is down, unreachable, or serving something unrecognized contributes no
+// sample rather than failing the tick.
 func (c *Collector) collectLLM(now time.Time) []models.LLMSample {
-	c.discoverLLMEndpoints(now)
+	c.seedConfiguredEndpoints()
+	c.maybeDiscover(now)
+
+	c.llm.mu.Lock()
+	endpoints := make([]llmscrape.Endpoint, 0, len(c.llm.endpoints))
+	for _, ep := range c.llm.endpoints {
+		endpoints = append(endpoints, ep)
+	}
+	c.llm.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), scrapeTimeout*time.Duration(len(endpoints)+1))
+	defer cancel()
 
 	var samples []models.LLMSample
-	for url, state := range c.llmEndpoints {
-		sample, ok := c.scrapeLLMEndpoint(url, state, now)
-		if !ok {
-			// An autodetected endpoint that stopped answering may have moved
-			// or shut down; forget it so the next probe can re-evaluate.
-			if state.autodetected {
-				delete(c.llmEndpoints, url)
+	for _, ep := range endpoints {
+		sample, err := c.llmScraper.Scrape(ctx, ep, now)
+		if err != nil {
+			// A discovered endpoint that stopped answering may have moved or
+			// shut down, so forget it and let discovery re-evaluate.
+			// Explicitly configured ones are kept: the operator asked for
+			// them, and a restart shouldn't silently drop them.
+			if !c.isConfigured(ep.URL) {
+				c.forgetEndpoint(ep.URL)
 			}
 			continue
 		}
@@ -77,317 +87,159 @@ func (c *Collector) collectLLM(now time.Time) []models.LLMSample {
 	return samples
 }
 
-// discoverLLMEndpoints seeds explicitly configured endpoints (once) and, when
-// autodetection is on, periodically probes well-known local ports.
-func (c *Collector) discoverLLMEndpoints(now time.Time) {
+// seedConfiguredEndpoints makes sure every endpoint from config.yaml is
+// active, regardless of what discovery finds.
+func (c *Collector) seedConfiguredEndpoints() {
+	c.llm.mu.Lock()
+	defer c.llm.mu.Unlock()
+
 	for _, ep := range c.llmConfig.Endpoints {
-		url := strings.TrimSuffix(ep.URL, "/")
+		url := strings.TrimSuffix(strings.TrimSpace(ep.URL), "/")
 		if url == "" {
 			continue
 		}
-		if _, exists := c.llmEndpoints[url]; !exists {
-			c.llmEndpoints[url] = &llmEndpointState{cfg: ep}
-		}
-	}
-
-	if !c.llmConfig.AutodetectEnabled() {
-		return
-	}
-	if !c.lastLLMProbe.IsZero() && now.Sub(c.lastLLMProbe) < probeInterval {
-		return
-	}
-	c.lastLLMProbe = now
-
-	for _, url := range autodetectTargets {
-		if _, exists := c.llmEndpoints[url]; exists {
-			continue
-		}
-		if _, _, ok := c.fetchMetrics(url, ""); ok {
-			c.llmEndpoints[url] = &llmEndpointState{
-				cfg:          config.LLMEndpoint{URL: url},
-				autodetected: true,
+		if _, exists := c.llm.endpoints[url]; !exists {
+			c.llm.endpoints[url] = llmscrape.Endpoint{
+				URL:     url,
+				Runtime: ep.Runtime,
+				APIKey:  ep.APIKey,
 			}
 		}
 	}
 }
 
-// scrapeLLMEndpoint fetches and maps one endpoint's metrics.
-func (c *Collector) scrapeLLMEndpoint(url string, state *llmEndpointState, now time.Time) (models.LLMSample, bool) {
-	metrics, runtime, ok := c.fetchMetrics(url, state.cfg.APIKey)
-	if !ok {
-		return models.LLMSample{}, false
+func (c *Collector) isConfigured(url string) bool {
+	for _, ep := range c.llmConfig.Endpoints {
+		if strings.TrimSuffix(strings.TrimSpace(ep.URL), "/") == url {
+			return true
+		}
 	}
-	if configured := state.cfg.Runtime; configured != "" && configured != "auto" {
-		runtime = configured
-	}
-
-	sample := models.LLMSample{
-		Time:     now,
-		Endpoint: url,
-		Runtime:  runtime,
-		Model:    c.llmModelName(url, state, metrics, runtime, now),
-	}
-
-	var counters llmCounterState
-	counters.at = now
-
-	switch runtime {
-	case runtimeVLLM:
-		mapVLLM(metrics, &sample, &counters)
-	case runtimeLlamaCpp:
-		mapLlamaCpp(metrics, &sample, &counters)
-	default:
-		return models.LLMSample{}, false
-	}
-
-	if prev, hadPrev := c.prevLLM[url]; hadPrev {
-		applyLLMRates(&sample, prev, counters)
-	}
-	c.prevLLM[url] = counters
-
-	return sample, true
+	return false
 }
 
-// vLLM renames metrics between releases, so each logical metric lists every
-// spelling we know of, newest first. Notably v0.9+ dropped the "gpu_" prefix
-// from the cache metrics and replaced time_per_output_token with
-// inter_token_latency. Matching only one spelling silently yields nil for
-// the metric on every other version, which is indistinguishable from a
-// runtime that genuinely can't report it — so the fallbacks matter.
-var (
-	vllmKVCacheNames     = []string{"vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"}
-	vllmPrefixQueryNames = []string{"vllm:prefix_cache_queries_total", "vllm:gpu_prefix_cache_queries_total"}
-	vllmPrefixHitNames   = []string{"vllm:prefix_cache_hits_total", "vllm:gpu_prefix_cache_hits_total"}
-	vllmRunningNames     = []string{"vllm:num_requests_running"}
-	vllmWaitingNames     = []string{"vllm:num_requests_waiting"}
-	vllmPromptNames      = []string{"vllm:prompt_tokens_total"}
-	vllmGeneratedNames   = []string{"vllm:generation_tokens_total"}
-	vllmPreemptionNames  = []string{"vllm:num_preemptions_total"}
-
-	// Histogram base names (the _sum/_count suffixes are appended).
-	vllmTTFTBases = []string{"vllm:time_to_first_token_seconds"}
-	vllmTPOTBases = []string{
-		"vllm:inter_token_latency_seconds",
-		"vllm:time_per_output_token_seconds",
-		"vllm:request_time_per_output_token_seconds",
-	}
-)
-
-// mapVLLM maps vLLM's metric names onto the normalized sample. vLLM reports
-// the richest set of the supported runtimes: it is the only one exposing
-// prefix-cache hit counters and scheduler preemptions.
-func mapVLLM(m promMetrics, s *models.LLMSample, ctr *llmCounterState) {
-	// Despite the "_perc" suffix vLLM reports this as a 0..1 fraction, which
-	// matches llama.cpp's ratio, so no conversion is needed.
-	s.KVCacheUsageRatio = m.firstPtr(vllmKVCacheNames...)
-
-	s.PromptTokensTotal = intPtrFirst(m, vllmPromptNames...)
-	s.GeneratedTokensTotal = intPtrFirst(m, vllmGeneratedNames...)
-	s.PrefixCacheQueriesTotal = intPtrFirst(m, vllmPrefixQueryNames...)
-	s.PrefixCacheHitsTotal = intPtrFirst(m, vllmPrefixHitNames...)
-	s.RequestsRunning = intFromFirst(m, vllmRunningNames...)
-	s.RequestsWaiting = intFromFirst(m, vllmWaitingNames...)
-
-	ctr.promptTokens, _ = m.firstValue(vllmPromptNames...)
-	ctr.genTokens, _ = m.firstValue(vllmGeneratedNames...)
-	ctr.prefixQueries, _ = m.firstValue(vllmPrefixQueryNames...)
-	ctr.prefixHits, _ = m.firstValue(vllmPrefixHitNames...)
-	ctr.preemptions, _ = m.firstValue(vllmPreemptionNames...)
-	ctr.ttftSum, ctr.ttftCount = m.histogram(vllmTTFTBases...)
-	ctr.tpotSum, ctr.tpotCount = m.histogram(vllmTPOTBases...)
+func (c *Collector) forgetEndpoint(url string) {
+	c.llm.mu.Lock()
+	delete(c.llm.endpoints, url)
+	c.llm.mu.Unlock()
+	c.llmScraper.Forget(url)
 }
 
-// mapLlamaCpp maps llama.cpp's metric names. It exposes no prefix-cache or
-// preemption counters, so those stay nil; its latency gauges are already
-// rates, so TPOT is derived directly rather than from a histogram.
-func mapLlamaCpp(m promMetrics, s *models.LLMSample, ctr *llmCounterState) {
-	s.KVCacheUsageRatio = m.ptr("llamacpp:kv_cache_usage_ratio")
-	s.KVCacheTokens = intPtr(m, "llamacpp:kv_cache_tokens")
-
-	s.PromptTokensTotal = intPtr(m, "llamacpp:prompt_tokens_total")
-	s.GeneratedTokensTotal = intPtr(m, "llamacpp:tokens_predicted_total")
-	s.RequestsRunning = intFromMetric(m, "llamacpp:requests_processing")
-	s.RequestsWaiting = intFromMetric(m, "llamacpp:requests_deferred")
-
-	// predicted_tokens_seconds is the generation rate of the last request, so
-	// its reciprocal is milliseconds per output token. There is no sound way
-	// to recover TTFT from what llama.cpp exposes, so TTFT stays nil rather
-	// than being fabricated from prompt throughput.
-	if rate, ok := m.value("llamacpp:predicted_tokens_seconds"); ok && rate > 0 {
-		ms := 1000 / rate
-		s.TPOTMsAvg = &ms
-	}
-
-	ctr.promptTokens, _ = m.value("llamacpp:prompt_tokens_total")
-	ctr.genTokens, _ = m.value("llamacpp:tokens_predicted_total")
-}
-
-// applyLLMRates fills in the derived per-second rates and windowed ratios from
-// the delta between two scrapes.
-//
-// Counters that went backwards mean the runtime restarted (llama-swap does
-// this on every model switch), so those rates are left nil for one tick rather
-// than reported as a large negative or bogus spike.
-func applyLLMRates(s *models.LLMSample, prev, cur llmCounterState) {
-	elapsed := cur.at.Sub(prev.at).Seconds()
-	if elapsed <= 0 {
+// maybeDiscover kicks off a discovery sweep in the background when one is
+// due. It returns immediately; newly found endpoints are picked up by a later
+// tick rather than this one.
+func (c *Collector) maybeDiscover(now time.Time) {
+	if !c.llmConfig.AutodetectEnabled() {
 		return
 	}
 
-	if rate, ok := perSec(prev.promptTokens, cur.promptTokens, elapsed); ok {
-		s.PromptTokensPerSec = &rate
+	c.llm.mu.Lock()
+	due := c.llm.lastDiscovery.IsZero() || now.Sub(c.llm.lastDiscovery) >= discoveryInterval
+	if !due || c.llm.discovering {
+		c.llm.mu.Unlock()
+		return
 	}
-	if rate, ok := perSec(prev.genTokens, cur.genTokens, elapsed); ok {
-		s.GeneratedTokensPerSec = &rate
-	}
-	if rate, ok := perSec(prev.preemptions, cur.preemptions, elapsed); ok {
-		s.PreemptionsPerSec = &rate
+	c.llm.discovering = true
+	c.llm.lastDiscovery = now
+	c.llm.mu.Unlock()
+
+	go func() {
+		defer func() {
+			c.llm.mu.Lock()
+			c.llm.discovering = false
+			c.llm.mu.Unlock()
+		}()
+		c.discover(now)
+	}()
+}
+
+// discover probes local listening ports for an inference runtime. Enumerating
+// what is actually listening, rather than guessing a handful of well-known
+// ports, is what lets a newly started server on an arbitrary port be picked
+// up without any configuration.
+func (c *Collector) discover(now time.Time) {
+	candidates := c.probeCandidates(now)
+	if len(candidates) == 0 {
+		return
 	}
 
-	// A hit ratio over the scrape window, rather than vLLM's since-boot
-	// cumulative figure, so the number reflects what the cache is doing now.
-	if queries := cur.prefixQueries - prev.prefixQueries; queries > 0 {
-		if hits := cur.prefixHits - prev.prefixHits; hits >= 0 {
-			ratio := hits / queries
-			s.PrefixCacheHitRatio = &ratio
+	sem := make(chan struct{}, maxConcurrentProbes)
+	var wg sync.WaitGroup
+
+	for _, url := range candidates {
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+			defer cancel()
+
+			runtime, err := c.llmProbe.Probe(ctx, url, "")
+			c.llm.mu.Lock()
+			defer c.llm.mu.Unlock()
+			if err != nil {
+				c.llm.negative[url] = now
+				return
+			}
+			delete(c.llm.negative, url)
+			c.llm.endpoints[url] = llmscrape.Endpoint{URL: url, Runtime: runtime}
+		}(url)
+	}
+	wg.Wait()
+}
+
+// probeCandidates returns loopback-reachable URLs worth probing: every
+// distinct listening TCP port, minus those already known and those rejected
+// recently enough to still be within the negative TTL.
+func (c *Collector) probeCandidates(now time.Time) []string {
+	conns, err := gopsnet.Connections("tcp")
+	if err != nil {
+		return nil
+	}
+
+	c.llm.mu.Lock()
+	defer c.llm.mu.Unlock()
+
+	seen := map[uint32]bool{}
+	var candidates []string
+	for _, conn := range conns {
+		if conn.Status != "LISTEN" || conn.Laddr.Port == 0 {
+			continue
 		}
-	}
-
-	if ms, ok := avgMillis(prev.ttftSum, cur.ttftSum, prev.ttftCount, cur.ttftCount); ok {
-		s.TTFTMsAvg = &ms
-	}
-	if ms, ok := avgMillis(prev.tpotSum, cur.tpotSum, prev.tpotCount, cur.tpotCount); ok {
-		s.TPOTMsAvg = &ms
-	}
-}
-
-// perSec derives a rate from two readings of a cumulative counter, rejecting
-// counter resets.
-func perSec(prev, cur, elapsed float64) (float64, bool) {
-	if cur < prev {
-		return 0, false
-	}
-	return (cur - prev) / elapsed, true
-}
-
-// avgMillis derives a mean latency in milliseconds from the _sum and _count
-// pair of a Prometheus histogram, over the scrape window only.
-func avgMillis(prevSum, curSum, prevCount, curCount float64) (float64, bool) {
-	count := curCount - prevCount
-	sum := curSum - prevSum
-	if count <= 0 || sum < 0 {
-		return 0, false
-	}
-	return (sum / count) * 1000, true
-}
-
-// llmModelName resolves which model an endpoint is serving. vLLM labels its
-// metrics with it; llama.cpp does not, so its name comes from /v1/models,
-// re-fetched periodically because llama-swap changes models underneath a
-// stable endpoint.
-func (c *Collector) llmModelName(url string, state *llmEndpointState, m promMetrics, runtime string, now time.Time) string {
-	if runtime == runtimeVLLM {
-		// vLLM tags its series with model_name, so no extra request is
-		// needed — and /v1/models would need the API key that /metrics does
-		// not, since vLLM's auth middleware only guards /v1 paths.
-		names := append(append([]string{}, vllmRunningNames...), vllmKVCacheNames...)
-		if model := m.firstLabel("model_name", names...); model != "" {
-			return model
+		if !listensLocally(conn.Laddr.IP) {
+			continue
 		}
-	}
+		if seen[conn.Laddr.Port] {
+			continue
+		}
+		seen[conn.Laddr.Port] = true
 
-	if state.model != "" && now.Sub(state.modelAt) < probeInterval {
-		return state.model
+		url := fmt.Sprintf("http://127.0.0.1:%d", conn.Laddr.Port)
+		if _, active := c.llm.endpoints[url]; active {
+			continue
+		}
+		if rejectedAt, ok := c.llm.negative[url]; ok && now.Sub(rejectedAt) < negativeTTL {
+			continue
+		}
+		candidates = append(candidates, url)
 	}
-	state.model = c.fetchModelName(url, state.cfg.APIKey)
-	state.modelAt = now
-	return state.model
+	return candidates
 }
 
-func (c *Collector) fetchModelName(url, apiKey string) string {
-	body, ok := c.httpGet(url+"/v1/models", apiKey)
-	if !ok {
-		return ""
-	}
-	var out struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(body), &out); err != nil || len(out.Data) == 0 {
-		return ""
-	}
-	return out.Data[0].ID
-}
-
-// fetchMetrics scrapes /metrics and identifies which runtime produced it from
-// the metric-name prefix.
-func (c *Collector) fetchMetrics(url, apiKey string) (promMetrics, string, bool) {
-	body, ok := c.httpGet(url+"/metrics", apiKey)
-	if !ok {
-		return nil, "", false
-	}
-
-	metrics := parseProm(body)
-	switch {
-	case metrics.hasPrefix("vllm:"):
-		return metrics, runtimeVLLM, true
-	case metrics.hasPrefix("llamacpp:"):
-		return metrics, runtimeLlamaCpp, true
+// listensLocally reports whether a listening socket is reachable over
+// loopback: either bound to loopback directly or to all interfaces.
+func listensLocally(ip string) bool {
+	switch ip {
+	case "127.0.0.1", "::1", "0.0.0.0", "::", "":
+		return true
 	default:
-		// Something else is listening on this port (a plain Prometheus
-		// exporter, an unrelated service); not ours to report on.
-		return nil, "", false
+		return false
 	}
 }
 
-func (c *Collector) httpGet(url, apiKey string) (string, bool) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return "", false
-	}
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-
-	resp, err := c.llmClient.Do(req)
-	if err != nil {
-		return "", false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", false
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return "", false
-	}
-	return string(body), true
-}
-
-func intPtr(m promMetrics, name string) *int64 {
-	return intPtrFirst(m, name)
-}
-
-func intFromMetric(m promMetrics, name string) *int {
-	return intFromFirst(m, name)
-}
-
-func intPtrFirst(m promMetrics, names ...string) *int64 {
-	v, ok := m.firstValue(names...)
-	if !ok {
-		return nil
-	}
-	i := int64(v)
-	return &i
-}
-
-func intFromFirst(m promMetrics, names ...string) *int {
-	v, ok := m.firstValue(names...)
-	if !ok {
-		return nil
-	}
-	i := int(v)
-	return &i
+// llmEndpointFor builds a discovered-endpoint entry with runtime detection
+// left to the scraper.
+func llmEndpointFor(url string) llmscrape.Endpoint {
+	return llmscrape.Endpoint{URL: url, Runtime: llmscrape.RuntimeAuto}
 }

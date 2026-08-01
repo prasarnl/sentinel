@@ -1,4 +1,4 @@
-package collector
+package llmscrape
 
 import (
 	"strconv"

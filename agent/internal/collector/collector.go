@@ -1,11 +1,11 @@
 package collector
 
 import (
-	"net/http"
 	"time"
 
 	"sentinel/agent/internal/config"
 	"sentinel/agent/internal/models"
+	"sentinel/llmscrape"
 )
 
 type diskIOState struct {
@@ -20,22 +20,26 @@ type diskIOState struct {
 type Collector struct {
 	prevDiskIO map[string]diskIOState
 
-	llmConfig    config.LLM
-	llmEndpoints map[string]*llmEndpointState
-	prevLLM      map[string]llmCounterState
-	lastLLMProbe time.Time
-	llmClient    *http.Client
+	llmConfig config.LLM
+	llm       *llmState
+	// llmScraper retains per-endpoint counters for rate derivation;
+	// llmProbe is separate so background discovery never touches that state.
+	llmScraper *llmscrape.Scraper
+	llmProbe   *llmscrape.Scraper
 }
 
 func New(llmCfg config.LLM) *Collector {
 	return &Collector{
-		prevDiskIO:   make(map[string]diskIOState),
-		llmConfig:    llmCfg,
-		llmEndpoints: make(map[string]*llmEndpointState),
-		prevLLM:      make(map[string]llmCounterState),
-		// Inference endpoints are local, so a short timeout is right: a slow
-		// one must never delay the tick that reports CPU/mem/disk/GPU.
-		llmClient: &http.Client{Timeout: llmScrapeTimeout},
+		prevDiskIO: make(map[string]diskIOState),
+		llmConfig:  llmCfg,
+		llm: &llmState{
+			endpoints: make(map[string]llmscrape.Endpoint),
+			negative:  make(map[string]time.Time),
+		},
+		// Inference endpoints are local, so short timeouts are right: a slow
+		// one must never delay the tick reporting CPU/mem/disk/GPU.
+		llmScraper: llmscrape.NewScraper(scrapeTimeout),
+		llmProbe:   llmscrape.NewScraper(probeTimeout),
 	}
 }
 

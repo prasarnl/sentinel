@@ -17,4 +17,7 @@ require (
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/sys v0.34.0 // indirect
+	sentinel/llmscrape v0.0.0
 )
+
+replace sentinel/llmscrape => ../llmscrape
