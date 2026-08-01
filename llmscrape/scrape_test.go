@@ -188,6 +188,42 @@ func TestApplyRates(t *testing.T) {
 	assertFloat(t, "tpot_ms_avg", s.TPOTMsAvg, 20)
 }
 
+// Values taken from the live qwen35B server, which runs MTP with
+// num_speculative_tokens=2. Over the window: 1000 speculated tokens across
+// 500 drafts, of which 790 were accepted.
+func TestApplyRatesSpeculativeDecode(t *testing.T) {
+	base := time.Now()
+	prev := counterState{specDrafts: 22450, specDraftToks: 44900, specAccepted: 35427, at: base}
+	cur := counterState{specDrafts: 22950, specDraftToks: 45900, specAccepted: 36217, at: base.Add(10 * time.Second)}
+
+	var s Sample
+	applyRates(&s, prev, cur)
+
+	assertFloat(t, "spec_decode_acceptance_rate", s.SpecDecodeAcceptanceRate, 0.79)
+	// 790 accepted over 500 drafts: 1.58 of the 2 speculated tokens survive,
+	// which is what tells an operator whether the setting is earning its cost.
+	assertFloat(t, "spec_decode_accepted_per_draft", s.SpecDecodeAcceptedPerDraft, 1.58)
+}
+
+// A server not running speculative decoding exposes none of these counters,
+// which must read as absent rather than as speculation that never lands.
+func TestSpecDecodeAbsentWhenNotConfigured(t *testing.T) {
+	var s Sample
+	var ctr counterState
+	mapVLLM(parseProm(vllmModernMetrics), &s, &ctr)
+
+	if s.SpecDecodeDraftTokensTotal != nil || s.SpecDecodeAcceptedTokensTotal != nil {
+		t.Error("spec decode totals present for a server without speculative decoding")
+	}
+
+	next := ctr
+	next.at = ctr.at.Add(10 * time.Second)
+	applyRates(&s, ctr, next)
+	if s.SpecDecodeAcceptanceRate != nil || s.SpecDecodeAcceptedPerDraft != nil {
+		t.Error("spec decode rates derived from absent counters; want nil")
+	}
+}
+
 func TestApplyRatesIgnoresCounterReset(t *testing.T) {
 	base := time.Now()
 	prev := counterState{promptTokens: 1000, genTokens: 500, preemptions: 5, at: base}

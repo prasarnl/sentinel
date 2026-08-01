@@ -13,9 +13,9 @@ import (
 )
 
 type createHostRequest struct {
-	Name string          `json:"name"`
-	OS   models.HostOS   `json:"os"`
-	Tags []string        `json:"tags"`
+	Name string        `json:"name"`
+	OS   models.HostOS `json:"os"`
+	Tags []string      `json:"tags"`
 }
 
 func (s *Server) CreateHost(w http.ResponseWriter, r *http.Request) {

@@ -53,6 +53,17 @@ type Sample struct {
 	// PreemptionsPerSec rising means the KV cache is oversubscribed and the
 	// scheduler is evicting in-flight requests. vLLM only.
 	PreemptionsPerSec *float64 `json:"preemptions_per_sec,omitempty"`
+
+	// Speculative decoding, when the runtime is configured for it. The two
+	// derived figures answer different questions: the acceptance rate is how
+	// much of the speculated work survived, while accepted-per-draft compared
+	// against the configured number of speculative tokens says whether that
+	// setting is earning its cost. Both are windowed, like the cache hit
+	// ratio, so they describe current behaviour rather than since-boot.
+	SpecDecodeDraftTokensTotal    *int64   `json:"spec_decode_draft_tokens_total,omitempty"`
+	SpecDecodeAcceptedTokensTotal *int64   `json:"spec_decode_accepted_tokens_total,omitempty"`
+	SpecDecodeAcceptanceRate      *float64 `json:"spec_decode_acceptance_rate,omitempty"`   // 0..1
+	SpecDecodeAcceptedPerDraft    *float64 `json:"spec_decode_accepted_per_draft,omitempty"` // tokens
 }
 
 // Endpoint describes something to scrape.
@@ -74,5 +85,8 @@ type counterState struct {
 	ttftCount     float64
 	tpotSum       float64
 	tpotCount     float64
+	specDrafts    float64
+	specDraftToks float64
+	specAccepted  float64
 	at            time.Time
 }

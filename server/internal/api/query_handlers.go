@@ -101,7 +101,8 @@ const llmColumns = `m.time, m.endpoint, m.runtime, m.model,
 	m.prompt_tokens_per_sec, m.generated_tokens_per_sec,
 	m.prefix_cache_queries_total, m.prefix_cache_hits_total, m.prefix_cache_hit_ratio,
 	m.requests_running, m.requests_waiting,
-	m.ttft_ms_avg, m.tpot_ms_avg, m.preemptions_per_sec`
+	m.ttft_ms_avg, m.tpot_ms_avg, m.preemptions_per_sec,
+	m.spec_decode_acceptance_rate, m.spec_decode_accepted_per_draft`
 
 // scanLLM reads one metrics_llm row. Nullable metrics stay nil in the JSON so
 // the dashboard can hide a tile the runtime cannot report, rather than
@@ -119,6 +120,7 @@ func scanLLM(rows pgx.Rows) map[string]any {
 		prefixRatio                   *float64
 		running, waiting              *int
 		ttft, tpot, preemptionsPerSec *float64
+		specRate, specPerDraft        *float64
 	)
 	if rows.Scan(&t, &endpoint, &runtime, &model,
 		&kvRatio, &kvTokens,
@@ -126,7 +128,8 @@ func scanLLM(rows pgx.Rows) map[string]any {
 		&promptPerSec, &genPerSec,
 		&prefixQueries, &prefixHits, &prefixRatio,
 		&running, &waiting,
-		&ttft, &tpot, &preemptionsPerSec) != nil {
+		&ttft, &tpot, &preemptionsPerSec,
+		&specRate, &specPerDraft) != nil {
 		return nil
 	}
 	return map[string]any{
@@ -138,6 +141,7 @@ func scanLLM(rows pgx.Rows) map[string]any {
 		"prefix_cache_hit_ratio": prefixRatio,
 		"requests_running":       running, "requests_waiting": waiting,
 		"ttft_ms_avg": ttft, "tpot_ms_avg": tpot, "preemptions_per_sec": preemptionsPerSec,
+		"spec_decode_acceptance_rate": specRate, "spec_decode_accepted_per_draft": specPerDraft,
 	}
 }
 
@@ -236,9 +240,9 @@ func (s *Server) HistoryMem(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	type point struct {
-		Time      time.Time `json:"time"`
-		UsedBytes float64   `json:"used_bytes"`
-		TotalBytes float64  `json:"total_bytes"`
+		Time       time.Time `json:"time"`
+		UsedBytes  float64   `json:"used_bytes"`
+		TotalBytes float64   `json:"total_bytes"`
 	}
 	points := []point{}
 
@@ -377,19 +381,23 @@ func (s *Server) writeLLMHistory(w http.ResponseWriter, r *http.Request, endpoin
 		TTFTMsAvg             *float64  `json:"ttft_ms_avg"`
 		TPOTMsAvg             *float64  `json:"tpot_ms_avg"`
 		PreemptionsPerSec     *float64  `json:"preemptions_per_sec"`
+		SpecAcceptanceRate    *float64  `json:"spec_decode_acceptance_rate"`
+		SpecAcceptedPerDraft  *float64  `json:"spec_decode_accepted_per_draft"`
 	}
 	points := []point{}
 
 	query := `SELECT time, kv_cache_usage_ratio, prompt_tokens_per_sec, generated_tokens_per_sec,
 			prefix_cache_hit_ratio, requests_running::float8, requests_waiting::float8,
-			ttft_ms_avg, tpot_ms_avg, preemptions_per_sec
+			ttft_ms_avg, tpot_ms_avg, preemptions_per_sec,
+			spec_decode_acceptance_rate, spec_decode_accepted_per_draft
 		FROM metrics_llm WHERE endpoint_id = $1 AND time >= $2 ORDER BY time`
 	if rng > rawCutoff {
 		// avg() over the INT request counts yields numeric, so it is cast
 		// back to float8 to match the point shape the raw branch produces.
 		query = `SELECT bucket, avg_kv_cache_usage_ratio, avg_prompt_tokens_per_sec, avg_generated_tokens_per_sec,
 				avg_prefix_cache_hit_ratio, avg_requests_running::float8, avg_requests_waiting::float8,
-				avg_ttft_ms, avg_tpot_ms, avg_preemptions_per_sec
+				avg_ttft_ms, avg_tpot_ms, avg_preemptions_per_sec,
+				avg_spec_decode_acceptance_rate, avg_spec_decode_accepted_per_draft
 			FROM metrics_llm_1m WHERE endpoint_id = $1 AND bucket >= $2 ORDER BY bucket`
 	}
 
@@ -403,7 +411,8 @@ func (s *Server) writeLLMHistory(w http.ResponseWriter, r *http.Request, endpoin
 		var p point
 		if rows.Scan(&p.Time, &p.KVCacheUsageRatio, &p.PromptTokensPerSec, &p.GeneratedTokensPerSec,
 			&p.PrefixCacheHitRatio, &p.RequestsRunning, &p.RequestsWaiting,
-			&p.TTFTMsAvg, &p.TPOTMsAvg, &p.PreemptionsPerSec) == nil {
+			&p.TTFTMsAvg, &p.TPOTMsAvg, &p.PreemptionsPerSec,
+			&p.SpecAcceptanceRate, &p.SpecAcceptedPerDraft) == nil {
 			points = append(points, p)
 		}
 	}

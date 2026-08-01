@@ -11,6 +11,9 @@ export const PROMPT_COLOR = "var(--series-1)";
 export const GENERATED_COLOR = "var(--series-4)";
 export const RUNNING_COLOR = "var(--series-1)";
 export const WAITING_COLOR = "var(--series-6)";
+// Single-series chart, so this only had to clear the lightness, chroma and
+// contrast checks rather than a CVD separation against a partner.
+export const SPEC_DECODE_COLOR = "var(--series-5)";
 
 type ChartRow = Record<string, unknown>;
 
@@ -57,6 +60,14 @@ export function LLMCharts({ history }: { history: LLMHistoryPoint[] }) {
     { key: "waiting", label: "Waiting", color: WAITING_COLOR },
   ]);
 
+  const specRows = toRows(history, (p) => ({
+    acceptance_pct:
+      p.spec_decode_acceptance_rate === null ? null : p.spec_decode_acceptance_rate * 100,
+  }));
+  const specSeries = seriesWithData(specRows, [
+    { key: "acceptance_pct", label: "Draft acceptance", color: SPEC_DECODE_COLOR },
+  ]);
+
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
       {/* Both series are percentages, so they share one axis. The story here
@@ -80,10 +91,24 @@ export function LLMCharts({ history }: { history: LLMHistoryPoint[] }) {
         <HistoryChart data={throughputRows} series={promptSeries} yFormatter={(v) => `${Math.round(v)}`} height={180} />
       </div>
 
-      <div className="lg:col-span-2">
+      <div className={specSeries.length > 0 ? "" : "lg:col-span-2"}>
         <div className="mb-1 text-xs text-[var(--text-secondary)]">Request queue</div>
         <HistoryChart data={queueRows} series={queueSeries} yFormatter={(v) => `${Math.round(v)}`} height={180} />
       </div>
+
+      {/* Omitted entirely for runtimes that aren't speculating, rather than
+          drawn as an empty axis. */}
+      {specSeries.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs text-[var(--text-secondary)]">Draft acceptance</div>
+          <HistoryChart
+            data={specRows}
+            series={specSeries}
+            yFormatter={(v) => `${Math.round(v)}%`}
+            height={180}
+          />
+        </div>
+      )}
     </div>
   );
 }

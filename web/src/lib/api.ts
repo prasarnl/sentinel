@@ -87,6 +87,11 @@ export interface LLMPoint {
   ttft_ms_avg: number | null;
   tpot_ms_avg: number | null;
   preemptions_per_sec: number | null;
+  /** Present only when the runtime is speculating (MTP, EAGLE, n-gram, a
+   * draft model). Null means no speculation at all — different from
+   * speculation that never gets accepted. */
+  spec_decode_acceptance_rate: number | null; // 0..1
+  spec_decode_accepted_per_draft: number | null; // tokens kept per draft round
 }
 
 /** A history sample. Counts come back as floats because long ranges are
@@ -102,6 +107,8 @@ export interface LLMHistoryPoint {
   ttft_ms_avg: number | null;
   tpot_ms_avg: number | null;
   preemptions_per_sec: number | null;
+  spec_decode_acceptance_rate: number | null;
+  spec_decode_accepted_per_draft: number | null;
 }
 
 export interface LatestSnapshot {

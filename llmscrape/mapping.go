@@ -19,6 +19,14 @@ var (
 	vllmGeneratedNames   = []string{"vllm:generation_tokens_total"}
 	vllmPreemptionNames  = []string{"vllm:num_preemptions_total"}
 
+	// Present only when the server runs speculative decoding (MTP, EAGLE,
+	// n-gram, a draft model). Absent otherwise, which is why these stay nil
+	// rather than zero — no speculation is not the same as speculation that
+	// never gets accepted.
+	vllmSpecDraftsNames      = []string{"vllm:spec_decode_num_drafts_total"}
+	vllmSpecDraftTokensNames = []string{"vllm:spec_decode_num_draft_tokens_total"}
+	vllmSpecAcceptedNames    = []string{"vllm:spec_decode_num_accepted_tokens_total"}
+
 	// Histogram base names; the _sum/_count suffixes are appended.
 	vllmTTFTBases = []string{"vllm:time_to_first_token_seconds"}
 	vllmTPOTBases = []string{
@@ -50,6 +58,12 @@ func mapVLLM(m promMetrics, s *Sample, ctr *counterState) {
 	ctr.preemptions, _ = m.firstValue(vllmPreemptionNames...)
 	ctr.ttftSum, ctr.ttftCount = m.histogram(vllmTTFTBases...)
 	ctr.tpotSum, ctr.tpotCount = m.histogram(vllmTPOTBases...)
+
+	s.SpecDecodeDraftTokensTotal = intPtrFirst(m, vllmSpecDraftTokensNames...)
+	s.SpecDecodeAcceptedTokensTotal = intPtrFirst(m, vllmSpecAcceptedNames...)
+	ctr.specDrafts, _ = m.firstValue(vllmSpecDraftsNames...)
+	ctr.specDraftToks, _ = m.firstValue(vllmSpecDraftTokensNames...)
+	ctr.specAccepted, _ = m.firstValue(vllmSpecAcceptedNames...)
 }
 
 // mapLlamaCpp maps llama.cpp's metric names. It exposes no prefix-cache or
@@ -105,6 +119,23 @@ func applyRates(s *Sample, prev, cur counterState) {
 		if hits := cur.prefixHits - prev.prefixHits; hits >= 0 {
 			ratio := hits / queries
 			s.PrefixCacheHitRatio = &ratio
+		}
+	}
+
+	// Speculative decoding, over the window only. Both denominators must have
+	// advanced: a window with no drafts says nothing about acceptance, and
+	// reporting a stale figure would misrepresent an idle server as a
+	// performing one.
+	if draftTokens := cur.specDraftToks - prev.specDraftToks; draftTokens > 0 {
+		if accepted := cur.specAccepted - prev.specAccepted; accepted >= 0 {
+			rate := accepted / draftTokens
+			s.SpecDecodeAcceptanceRate = &rate
+		}
+	}
+	if drafts := cur.specDrafts - prev.specDrafts; drafts > 0 {
+		if accepted := cur.specAccepted - prev.specAccepted; accepted >= 0 {
+			perDraft := accepted / drafts
+			s.SpecDecodeAcceptedPerDraft = &perDraft
 		}
 	}
 

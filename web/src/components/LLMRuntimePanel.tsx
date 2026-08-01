@@ -2,7 +2,15 @@ import { useEffect, useState } from "react";
 import { api, type LLMHistoryPoint, type LLMPoint } from "../lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/Card";
 import { Select } from "./ui/Select";
-import { LLMCharts, KV_CACHE_COLOR, PREFIX_HIT_COLOR, PROMPT_COLOR, GENERATED_COLOR, RUNNING_COLOR } from "./LLMCharts";
+import {
+  LLMCharts,
+  KV_CACHE_COLOR,
+  PREFIX_HIT_COLOR,
+  PROMPT_COLOR,
+  GENERATED_COLOR,
+  RUNNING_COLOR,
+  SPEC_DECODE_COLOR,
+} from "./LLMCharts";
 import { StatTile } from "./StatTile";
 import { formatCount, formatMillis, formatRatioPct, formatTokensPerSec } from "../lib/format";
 
@@ -135,6 +143,30 @@ export function LLMRuntimePanel({
               hint={current.preemptions_per_sec ? "cache oversubscribed" : undefined}
             />
           </div>
+
+          {/* Only rendered when the runtime is actually speculating, rather
+              than sitting there as two permanent n/a tiles on the servers
+              that aren't. */}
+          {(current.spec_decode_acceptance_rate !== null ||
+            current.spec_decode_accepted_per_draft !== null) && (
+            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <StatTile
+                label="Draft acceptance"
+                value={formatRatioPct(current.spec_decode_acceptance_rate)}
+                hint="of speculated tokens kept"
+                color={SPEC_DECODE_COLOR}
+              />
+              <StatTile
+                label="Accepted per draft"
+                value={
+                  current.spec_decode_accepted_per_draft === null
+                    ? null
+                    : current.spec_decode_accepted_per_draft.toFixed(2)
+                }
+                hint="compare to num_speculative_tokens"
+              />
+            </div>
+          )}
 
           <LLMCharts history={history} />
 
