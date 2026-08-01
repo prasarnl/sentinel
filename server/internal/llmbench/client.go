@@ -45,11 +45,40 @@ type chatChunk struct {
 	Choices []struct {
 		Delta struct {
 			Content string `json:"content"`
+			// A reasoning model streams its thinking in a separate field —
+			// vLLM's reasoning parsers emit "reasoning", other backends
+			// "reasoning_content" — and leaves content empty until the
+			// thinking ends. Those are still generated tokens: they cost
+			// the same compute and time, and they are what the user waits
+			// through. Counting only content made a working reasoning model
+			// look like a dead stream whenever max_tokens ran out before it
+			// finished thinking.
+			Reasoning        string `json:"reasoning"`
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
 		CompletionTokens int `json:"completion_tokens"`
 	} `json:"usage"`
+}
+
+// output returns everything the model emitted in a chunk, whether it arrived
+// as content or as reasoning.
+func (c chatChunk) output() (text string, reasoning bool) {
+	if len(c.Choices) == 0 {
+		return "", false
+	}
+	d := c.Choices[0].Delta
+	switch {
+	case d.Content != "":
+		return d.Content, false
+	case d.Reasoning != "":
+		return d.Reasoning, true
+	case d.ReasoningContent != "":
+		return d.ReasoningContent, true
+	default:
+		return "", false
+	}
 }
 
 // RequestResult is the timing/token outcome of a single streamed chat
@@ -58,6 +87,11 @@ type RequestResult struct {
 	TTFT             time.Duration
 	TotalTime        time.Duration
 	CompletionTokens int
+	// ReasoningChars is how much of the output was thinking rather than
+	// answer. A run where this is everything means max_tokens ran out before
+	// the model stopped reasoning — the numbers are real, but they measure
+	// the thinking phase, which is worth saying out loud.
+	ReasoningChars int
 }
 
 type modelsResponse struct {
@@ -190,12 +224,13 @@ func streamChatCompletion(ctx context.Context, httpClient *http.Client, baseURL,
 	}
 
 	var (
-		ttft        time.Duration
-		gotFirst    bool
-		content     strings.Builder
-		usageTokens int
-		haveUsage   bool
-		rawSample   strings.Builder // verbatim lines, for diagnosing unrecognized response shapes
+		ttft           time.Duration
+		gotFirst       bool
+		content        strings.Builder
+		reasoningChars int
+		usageTokens    int
+		haveUsage      bool
+		rawSample      strings.Builder // verbatim lines, for diagnosing unrecognized response shapes
 	)
 
 	// 4MB per line: some backends (e.g. llama.cpp/llama-swap) can emit a
@@ -221,12 +256,15 @@ func streamChatCompletion(ctx context.Context, httpClient *http.Client, baseURL,
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue // skip malformed/keep-alive frames
 		}
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+		if text, isReasoning := chunk.output(); text != "" {
 			if !gotFirst {
 				ttft = time.Since(start)
 				gotFirst = true
 			}
-			content.WriteString(chunk.Choices[0].Delta.Content)
+			content.WriteString(text)
+			if isReasoning {
+				reasoningChars += len(text)
+			}
 		}
 		if chunk.Usage != nil {
 			usageTokens = chunk.Usage.CompletionTokens
@@ -258,7 +296,10 @@ func streamChatCompletion(ctx context.Context, httpClient *http.Client, baseURL,
 		tokens = EstimateTokens(content.String())
 	}
 
-	return RequestResult{TTFT: ttft, TotalTime: total, CompletionTokens: tokens}, nil
+	return RequestResult{
+		TTFT: ttft, TotalTime: total, CompletionTokens: tokens,
+		ReasoningChars: reasoningChars,
+	}, nil
 }
 
 func fmtElapsed(d time.Duration) string {
