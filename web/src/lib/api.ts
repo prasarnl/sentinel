@@ -61,7 +61,7 @@ export interface GPUPoint {
   temp_c: number | null;
 }
 
-export type LLMRuntime = "llamacpp" | "vllm";
+export type LLMRuntime = "llamacpp" | "vllm" | "lmstudio";
 
 /** One scrape of an inference runtime's metrics endpoint on a host.
  *
@@ -92,6 +92,12 @@ export interface LLMPoint {
    * speculation that never gets accepted. */
   spec_decode_acceptance_rate: number | null; // 0..1
   spec_decode_accepted_per_draft: number | null; // tokens kept per draft round
+  /** Residency, for runtimes that report what is loaded rather than how it
+   * performs. context_length is what the model was actually loaded with,
+   * usually far below max_context_length. */
+  quantization: string | null;
+  context_length: number | null;
+  max_context_length: number | null;
 }
 
 /** A history sample. Counts come back as floats because long ranges are

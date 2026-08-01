@@ -89,8 +89,9 @@ func (s *Server) Ingest(w http.ResponseWriter, r *http.Request) {
 				prefix_cache_queries_total, prefix_cache_hits_total, prefix_cache_hit_ratio,
 				requests_running, requests_waiting,
 				ttft_ms_avg, tpot_ms_avg, preemptions_per_sec,
-				spec_decode_acceptance_rate, spec_decode_accepted_per_draft
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+				spec_decode_acceptance_rate, spec_decode_accepted_per_draft,
+				quantization, context_length, max_context_length
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
 			l.Time, hostID, ep.id, l.Endpoint, l.Runtime, nullIfEmpty(l.Model),
 			l.KVCacheUsageRatio, l.KVCacheTokens,
 			l.PromptTokensTotal, l.GeneratedTokensTotal,
@@ -99,6 +100,7 @@ func (s *Server) Ingest(w http.ResponseWriter, r *http.Request) {
 			l.RequestsRunning, l.RequestsWaiting,
 			l.TTFTMsAvg, l.TPOTMsAvg, l.PreemptionsPerSec,
 			l.SpecDecodeAcceptanceRate, l.SpecDecodeAcceptedPerDraft,
+			nullIfEmpty(l.Quantization), l.ContextLength, l.MaxContextLength,
 		)
 		batch.Queue(
 			`UPDATE llm_endpoints SET last_scrape_at = $2, last_scrape_error = NULL WHERE id = $1`,

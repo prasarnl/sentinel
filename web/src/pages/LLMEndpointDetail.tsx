@@ -114,7 +114,23 @@ export function LLMEndpointDetail() {
 
       {!healthy && <Diagnosis endpoint={endpoint} />}
 
-      {healthy && (
+      {healthy && endpoint.runtime === "lmstudio" && (
+        <Card>
+          <CardContent className="pt-4">
+            <p className="text-sm font-medium">
+              {endpoint.model ? `Loaded: ${endpoint.model}` : "No model currently loaded"}
+            </p>
+            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+              LM Studio publishes no Prometheus metrics, so KV cache, throughput and queue depth
+              can't be charted for this endpoint — those figures aren't exposed by that runtime.
+              Sentinel records which model is resident instead. vLLM, or llama.cpp started with{" "}
+              <code>--metrics</code>, would provide the full set.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {healthy && endpoint.runtime !== "lmstudio" && (
         <Card>
           <CardHeader>
             <CardTitle>{endpoint.model || "Runtime metrics"}</CardTitle>

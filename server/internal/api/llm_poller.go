@@ -136,8 +136,9 @@ func storeRemoteSample(ctx context.Context, pool *pgxpool.Pool, hub *ws.Hub, end
 			prefix_cache_queries_total, prefix_cache_hits_total, prefix_cache_hit_ratio,
 			requests_running, requests_waiting,
 			ttft_ms_avg, tpot_ms_avg, preemptions_per_sec,
-			spec_decode_acceptance_rate, spec_decode_accepted_per_draft
-		) VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+			spec_decode_acceptance_rate, spec_decode_accepted_per_draft,
+			quantization, context_length, max_context_length
+		) VALUES ($1,NULL,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
 		s.Time, endpointID, s.Endpoint, s.Runtime, nullIfEmpty(s.Model),
 		s.KVCacheUsageRatio, s.KVCacheTokens,
 		s.PromptTokensTotal, s.GeneratedTokensTotal,
@@ -145,7 +146,8 @@ func storeRemoteSample(ctx context.Context, pool *pgxpool.Pool, hub *ws.Hub, end
 		s.PrefixCacheQueriesTotal, s.PrefixCacheHitsTotal, s.PrefixCacheHitRatio,
 		s.RequestsRunning, s.RequestsWaiting,
 		s.TTFTMsAvg, s.TPOTMsAvg, s.PreemptionsPerSec,
-		s.SpecDecodeAcceptanceRate, s.SpecDecodeAcceptedPerDraft)
+		s.SpecDecodeAcceptanceRate, s.SpecDecodeAcceptedPerDraft,
+		nullIfEmpty(s.Quantization), s.ContextLength, s.MaxContextLength)
 	if err != nil {
 		log.Printf("poll: store sample for %s: %v", endpointID, err)
 		return

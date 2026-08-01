@@ -102,7 +102,8 @@ const llmColumns = `m.time, m.endpoint, m.runtime, m.model,
 	m.prefix_cache_queries_total, m.prefix_cache_hits_total, m.prefix_cache_hit_ratio,
 	m.requests_running, m.requests_waiting,
 	m.ttft_ms_avg, m.tpot_ms_avg, m.preemptions_per_sec,
-	m.spec_decode_acceptance_rate, m.spec_decode_accepted_per_draft`
+	m.spec_decode_acceptance_rate, m.spec_decode_accepted_per_draft,
+	m.quantization, m.context_length, m.max_context_length`
 
 // scanLLM reads one metrics_llm row. Nullable metrics stay nil in the JSON so
 // the dashboard can hide a tile the runtime cannot report, rather than
@@ -121,6 +122,8 @@ func scanLLM(rows pgx.Rows) map[string]any {
 		running, waiting              *int
 		ttft, tpot, preemptionsPerSec *float64
 		specRate, specPerDraft        *float64
+		quantization                  *string
+		ctxLen, maxCtxLen             *int
 	)
 	if rows.Scan(&t, &endpoint, &runtime, &model,
 		&kvRatio, &kvTokens,
@@ -129,7 +132,8 @@ func scanLLM(rows pgx.Rows) map[string]any {
 		&prefixQueries, &prefixHits, &prefixRatio,
 		&running, &waiting,
 		&ttft, &tpot, &preemptionsPerSec,
-		&specRate, &specPerDraft) != nil {
+		&specRate, &specPerDraft,
+		&quantization, &ctxLen, &maxCtxLen) != nil {
 		return nil
 	}
 	return map[string]any{
@@ -142,6 +146,7 @@ func scanLLM(rows pgx.Rows) map[string]any {
 		"requests_running":       running, "requests_waiting": waiting,
 		"ttft_ms_avg": ttft, "tpot_ms_avg": tpot, "preemptions_per_sec": preemptionsPerSec,
 		"spec_decode_acceptance_rate": specRate, "spec_decode_accepted_per_draft": specPerDraft,
+		"quantization": quantization, "context_length": ctxLen, "max_context_length": maxCtxLen,
 	}
 }
 

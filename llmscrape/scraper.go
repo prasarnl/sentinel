@@ -73,6 +73,15 @@ func (s *Scraper) Scrape(ctx context.Context, ep Endpoint, now time.Time) (Sampl
 
 	body, err := s.get(ctx, url+"/metrics", ep.APIKey)
 	if err != nil {
+		// Reachable but serving no metrics may still be a runtime we can say
+		// something useful about, so fall back before giving up. Unreachable
+		// is final — nothing answered, so there is nothing else to ask.
+		if errors.Is(err, ErrNoMetrics) {
+			if sample, lmErr := s.scrapeLMStudio(ctx, url, ep.APIKey); lmErr == nil {
+				sample.Time = now
+				return sample, nil
+			}
+		}
 		return Sample{}, err
 	}
 
@@ -82,6 +91,10 @@ func (s *Scraper) Scrape(ctx context.Context, ep Endpoint, now time.Time) (Sampl
 		// exactly this: GET /metrics returns 200 with a JSON error body
 		// rather than a 404, so status alone can't be trusted to tell a
 		// metrics endpoint from a runtime that has none.
+		if sample, lmErr := s.scrapeLMStudio(ctx, url, ep.APIKey); lmErr == nil {
+			sample.Time = now
+			return sample, nil
+		}
 		return Sample{}, ErrNoMetrics
 	}
 	runtime := detectRuntime(metrics)

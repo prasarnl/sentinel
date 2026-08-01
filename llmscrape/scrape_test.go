@@ -358,6 +358,90 @@ func TestScrapeDistinguishesFailureModes(t *testing.T) {
 	}
 }
 
+// Captured from the live LM Studio instance: /metrics answers 200 with a JSON
+// error, and /api/v0/models reports residency for every installed model.
+const lmStudioModelsJSON = `{"data":[
+ {"id":"google/gemma-4-12b","state":"loaded","type":"vlm","arch":"gemma4","quantization":"Q4_K_M","loaded_context_length":32768,"max_context_length":262144},
+ {"id":"gemma-4-26b-a4b-it","state":"not-loaded","type":"vlm","arch":"gemma4","quantization":"Q2_K_XL","max_context_length":262144},
+ {"id":"openai/gpt-oss-20b","state":"not-loaded","type":"llm","arch":"gpt-oss","quantization":"MXFP4","max_context_length":131072}
+]}`
+
+func newLMStudio(t *testing.T, modelsJSON string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v0/models" {
+			fmt.Fprint(w, modelsJSON)
+			return
+		}
+		// 200 with a JSON error, exactly as the real server does.
+		fmt.Fprint(w, `{"error":"Unexpected endpoint or method. (GET /metrics)"}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestScrapeLMStudioReportsResidencyOnly(t *testing.T) {
+	srv := newLMStudio(t, lmStudioModelsJSON)
+
+	got, err := NewScraper(2 * time.Second).Scrape(context.Background(), Endpoint{URL: srv.URL}, time.Now())
+	if err != nil {
+		t.Fatalf("scrape: %v", err)
+	}
+
+	if got.Runtime != RuntimeLMStudio {
+		t.Errorf("runtime = %q, want %q", got.Runtime, RuntimeLMStudio)
+	}
+	if got.Model != "google/gemma-4-12b" {
+		t.Errorf("model = %q, want the loaded one, not the first listed", got.Model)
+	}
+	if got.Quantization != "Q4_K_M" {
+		t.Errorf("quantization = %q, want Q4_K_M", got.Quantization)
+	}
+	// The loaded context, not the model's maximum — that is what determines
+	// real KV cache footprint, and here it is an eighth of the ceiling.
+	if got.ContextLength == nil || *got.ContextLength != 32768 {
+		t.Errorf("context_length = %v, want 32768", got.ContextLength)
+	}
+	if got.MaxContextLength == nil || *got.MaxContextLength != 262144 {
+		t.Errorf("max_context_length = %v, want 262144", got.MaxContextLength)
+	}
+	if got.ModelsInstalled != 3 {
+		t.Errorf("models_installed = %d, want 3", got.ModelsInstalled)
+	}
+
+	// LM Studio publishes none of these. Reporting zeros would describe a
+	// server sitting idle rather than one that cannot measure itself.
+	if got.KVCacheUsageRatio != nil || got.GeneratedTokensPerSec != nil ||
+		got.RequestsRunning != nil || got.TTFTMsAvg != nil {
+		t.Error("performance metrics populated for LM Studio; they do not exist for that runtime")
+	}
+}
+
+// Installed but nothing resident is a healthy server, not a failed scrape.
+func TestScrapeLMStudioWithNothingLoaded(t *testing.T) {
+	srv := newLMStudio(t, `{"data":[{"id":"a","state":"not-loaded","max_context_length":4096}]}`)
+
+	got, err := NewScraper(2 * time.Second).Scrape(context.Background(), Endpoint{URL: srv.URL}, time.Now())
+	if err != nil {
+		t.Fatalf("scrape: %v", err)
+	}
+	if got.Model != "" {
+		t.Errorf("model = %q, want empty when nothing is loaded", got.Model)
+	}
+	if got.ModelsInstalled != 1 {
+		t.Errorf("models_installed = %d, want 1", got.ModelsInstalled)
+	}
+}
+
+// The fallback must not paper over a genuinely dead endpoint: nothing
+// answered, so there is nothing to ask a second time.
+func TestUnreachableIsNotRetriedAsLMStudio(t *testing.T) {
+	_, err := NewScraper(time.Second).Scrape(context.Background(), Endpoint{URL: "http://127.0.0.1:1"}, time.Now())
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("err = %v, want ErrUnreachable", err)
+	}
+}
+
 func TestProbeIdentifiesRuntimeWithoutRetainingState(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, vllmModernMetrics)

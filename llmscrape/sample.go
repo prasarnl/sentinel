@@ -7,6 +7,11 @@ import "time"
 const (
 	RuntimeLlamaCpp = "llamacpp"
 	RuntimeVLLM     = "vllm"
+	// RuntimeLMStudio publishes no Prometheus metrics whatsoever, so samples
+	// from it carry model residency only and every performance field stays
+	// nil. It is included so such a host reads as "up, serving X" rather than
+	// as a permanently broken endpoint.
+	RuntimeLMStudio = "lmstudio"
 
 	// RuntimeAuto asks for detection rather than asserting a runtime.
 	RuntimeAuto = "auto"
@@ -64,6 +69,15 @@ type Sample struct {
 	SpecDecodeAcceptedTokensTotal *int64   `json:"spec_decode_accepted_tokens_total,omitempty"`
 	SpecDecodeAcceptanceRate      *float64 `json:"spec_decode_acceptance_rate,omitempty"`   // 0..1
 	SpecDecodeAcceptedPerDraft    *float64 `json:"spec_decode_accepted_per_draft,omitempty"` // tokens
+
+	// Model residency, for runtimes that report what is loaded rather than
+	// how it is performing. ContextLength is what the model was actually
+	// loaded with, which is usually well below MaxContextLength and is the
+	// number that determines real KV cache footprint.
+	Quantization     string `json:"quantization,omitempty"`
+	ContextLength    *int   `json:"context_length,omitempty"`
+	MaxContextLength *int   `json:"max_context_length,omitempty"`
+	ModelsInstalled  int    `json:"models_installed,omitempty"`
 }
 
 // Endpoint describes something to scrape.
