@@ -269,7 +269,7 @@ func TestScrapeDerivesRatesAcrossCalls(t *testing.T) {
 // data" to a user but mean very different things operationally, and the UI
 // reports them differently.
 func TestScrapeDistinguishesFailureModes(t *testing.T) {
-	// Answers HTTP but serves no /metrics — the expected LM Studio shape.
+	// Answers HTTP but serves no /metrics, via an honest 404.
 	noMetrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
 			fmt.Fprint(w, `{"data":[{"id":"some-model"}]}`)
@@ -278,6 +278,21 @@ func TestScrapeDistinguishesFailureModes(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer noMetrics.Close()
+
+	// LM Studio, captured from a live instance: GET /metrics returns 200 with
+	// a JSON error rather than a 404, so HTTP status alone cannot distinguish
+	// a metrics endpoint from a runtime that has none. Reporting this as
+	// "unrecognized runtime" would be wrong — it is a runtime, it just
+	// publishes no Prometheus metrics.
+	lmStudio := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			fmt.Fprint(w, `{"data":[{"id":"qwen2.5-7b-instruct"}]}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"error":"Unexpected endpoint or method. (GET /metrics)"}`)
+	}))
+	defer lmStudio.Close()
 
 	// Serves metrics, but not from an inference runtime.
 	otherExporter := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -290,7 +305,8 @@ func TestScrapeDistinguishesFailureModes(t *testing.T) {
 		url  string
 		want error
 	}{
-		{"no metrics endpoint", noMetrics.URL, ErrNoMetrics},
+		{"404 on metrics", noMetrics.URL, ErrNoMetrics},
+		{"lm studio: 200 with a json error body", lmStudio.URL, ErrNoMetrics},
 		{"unrelated exporter", otherExporter.URL, ErrUnknownRuntime},
 		{"nothing listening", "http://127.0.0.1:1", ErrUnreachable},
 	}

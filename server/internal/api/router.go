@@ -59,6 +59,7 @@ func (s *Server) Router() (http.Handler, error) {
 			r.Get("/settings", s.GetSettings)
 
 			r.Get("/llm-endpoints", s.ListLLMEndpoints)
+			r.Get("/llm-endpoints/{id}/history", s.HistoryLLMEndpoint)
 
 			r.Get("/llm-targets", s.ListLLMTargets)
 			r.Get("/llm-targets/{id}", s.GetLLMTarget)

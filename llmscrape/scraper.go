@@ -77,6 +77,13 @@ func (s *Scraper) Scrape(ctx context.Context, ep Endpoint, now time.Time) (Sampl
 	}
 
 	metrics := parseProm(body)
+	if len(metrics) == 0 {
+		// Answered, but not in the exposition format at all. LM Studio does
+		// exactly this: GET /metrics returns 200 with a JSON error body
+		// rather than a 404, so status alone can't be trusted to tell a
+		// metrics endpoint from a runtime that has none.
+		return Sample{}, ErrNoMetrics
+	}
 	runtime := detectRuntime(metrics)
 	if runtime == "" {
 		return Sample{}, ErrUnknownRuntime
@@ -118,7 +125,11 @@ func (s *Scraper) Probe(ctx context.Context, url string, apiKey string) (runtime
 	if err != nil {
 		return "", err
 	}
-	if rt := detectRuntime(parseProm(body)); rt != "" {
+	metrics := parseProm(body)
+	if len(metrics) == 0 {
+		return "", ErrNoMetrics
+	}
+	if rt := detectRuntime(metrics); rt != "" {
 		return rt, nil
 	}
 	return "", ErrUnknownRuntime

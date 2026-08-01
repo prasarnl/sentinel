@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Boxes, Plus, Trash2, Radio } from "lucide-react";
 import { api, type Host, type LLMEndpoint, type LLMTarget } from "../lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/Card";
@@ -49,6 +50,7 @@ function EndpointRow({
   isAdmin: boolean;
   onChange: () => void;
 }) {
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const status = scrapeStatus(endpoint);
 
@@ -84,7 +86,10 @@ function EndpointRow({
 
   return (
     <div className="flex items-center gap-3 border-b border-[var(--border)] py-2.5 last:border-b-0">
-      <div className="min-w-0 flex-1">
+      <button
+        onClick={() => navigate(`/llm-endpoints/${endpoint.id}`)}
+        className="min-w-0 flex-1 cursor-pointer text-left"
+      >
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium">{endpoint.name || endpoint.model || endpoint.url}</span>
           {/* Not labelled "auto": the runtime badge beside this one uses
@@ -100,7 +105,7 @@ function EndpointRow({
           )}
         </div>
         <div className="truncate font-mono text-xs text-[var(--text-muted)]">{endpoint.url}</div>
-      </div>
+      </button>
 
       <div className={`shrink-0 text-xs ${TONE_CLASS[status.tone]}`}>{status.label}</div>
 

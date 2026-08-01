@@ -322,6 +322,20 @@ func (s *Server) HistoryDisk(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, points)
 }
 
+// HistoryLLMEndpoint returns history for a registered endpoint by id. Remote
+// endpoints belong to no host, so they cannot be addressed through the
+// per-host route.
+func (s *Server) HistoryLLMEndpoint(w http.ResponseWriter, r *http.Request) {
+	endpointID := chi.URLParam(r, "id")
+	var exists bool
+	if err := s.Pool.QueryRow(r.Context(),
+		`SELECT true FROM llm_endpoints WHERE id = $1`, endpointID).Scan(&exists); err != nil {
+		writeError(w, http.StatusNotFound, "no such endpoint")
+		return
+	}
+	s.writeLLMHistory(w, r, endpointID)
+}
+
 // HistoryLLM returns inference-runtime history for one endpoint on a host.
 // Counts are cast to float8 so raw rows and the averaged 1-minute rollups
 // share a single point shape, as HistoryGPU does for byte counters.
@@ -332,6 +346,22 @@ func (s *Server) HistoryLLM(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "endpoint query parameter is required")
 		return
 	}
+	// Both the raw table and the rollup are keyed by endpoint_id, so the URL
+	// the client holds is resolved through the registry first.
+	var endpointID string
+	err := s.Pool.QueryRow(r.Context(),
+		`SELECT id FROM llm_endpoints WHERE host_id = $1 AND url = $2`, hostID, endpoint).Scan(&endpointID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no such endpoint for this host")
+		return
+	}
+	s.writeLLMHistory(w, r, endpointID)
+}
+
+// writeLLMHistory is the shared body of both LLM history routes. Counts are
+// cast to float8 so raw rows and the averaged 1-minute rollups share a single
+// point shape, as HistoryGPU does for byte counters.
+func (s *Server) writeLLMHistory(w http.ResponseWriter, r *http.Request, endpointID string) {
 	rng := parseRange(r)
 	since := time.Now().Add(-rng)
 	ctx := r.Context()
@@ -349,16 +379,6 @@ func (s *Server) HistoryLLM(w http.ResponseWriter, r *http.Request) {
 		PreemptionsPerSec     *float64  `json:"preemptions_per_sec"`
 	}
 	points := []point{}
-
-	// Both the raw table and the rollup are keyed by endpoint_id, so the URL
-	// the client holds is resolved through the registry first.
-	var endpointID string
-	err := s.Pool.QueryRow(ctx,
-		`SELECT id FROM llm_endpoints WHERE host_id = $1 AND url = $2`, hostID, endpoint).Scan(&endpointID)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "no such endpoint for this host")
-		return
-	}
 
 	query := `SELECT time, kv_cache_usage_ratio, prompt_tokens_per_sec, generated_tokens_per_sec,
 			prefix_cache_hit_ratio, requests_running::float8, requests_waiting::float8,

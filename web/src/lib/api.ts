@@ -294,6 +294,8 @@ export const api = {
     }),
 
   listLLMEndpoints: () => request<LLMEndpoint[]>("/llm-endpoints"),
+  historyLLMEndpoint: (id: string, range: string) =>
+    request<LLMHistoryPoint[]>(`/llm-endpoints/${id}/history?range=${range}`),
   createLLMEndpoint: (body: {
     host_id: string | null;
     name: string;

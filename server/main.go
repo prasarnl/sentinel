@@ -37,6 +37,9 @@ func main() {
 	hub := ws.NewHub()
 
 	go markStaleHostsOffline(ctx, pool)
+	// Endpoints registered without a host have no agent to scrape them, so
+	// the server does it directly.
+	go api.PollRemoteEndpoints(ctx, pool, hub)
 
 	server := &api.Server{Pool: pool, Auth: authSvc, Hub: hub, DownloadsDir: cfg.DownloadsDir}
 	router, err := server.Router()
