@@ -132,6 +132,48 @@ func (m promMetrics) ptr(name string) *float64 {
 	return &v
 }
 
+// firstValue returns the value of the first name that is present. Runtimes
+// rename metrics between releases, so each logical metric is looked up
+// through a list of known spellings rather than one hardcoded name.
+func (m promMetrics) firstValue(names ...string) (float64, bool) {
+	for _, name := range names {
+		if v, ok := m.value(name); ok {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func (m promMetrics) firstPtr(names ...string) *float64 {
+	if v, ok := m.firstValue(names...); ok {
+		return &v
+	}
+	return nil
+}
+
+// firstLabel returns a label from the first named metric that carries it.
+func (m promMetrics) firstLabel(key string, names ...string) string {
+	for _, name := range names {
+		if v := m.label(name, key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// histogram returns the _sum/_count pair of the first histogram base name
+// that exposes both, for deriving a mean from a Prometheus histogram.
+func (m promMetrics) histogram(bases ...string) (sum, count float64) {
+	for _, base := range bases {
+		s, okSum := m.value(base + "_sum")
+		c, okCount := m.value(base + "_count")
+		if okSum && okCount {
+			return s, c
+		}
+	}
+	return 0, 0
+}
+
 // hasPrefix reports whether any metric name starts with the given prefix,
 // which is how a runtime is identified ("vllm:" vs "llamacpp:").
 func (m promMetrics) hasPrefix(prefix string) bool {

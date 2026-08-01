@@ -53,6 +53,80 @@ llamacpp:requests_deferred 1
 llamacpp:predicted_tokens_seconds 40
 `
 
+// Metric names as emitted by vLLM v0.9+ (captured from a live server running
+// Qwen3.6-35B on a GB10). Relative to the older naming in vllmMetrics above,
+// the gpu_ prefixes are gone and time_per_output_token became
+// inter_token_latency. Both spellings must map, since a mismatch silently
+// yields nil — visually identical to a runtime that can't report the metric.
+const vllmModernMetrics = `
+vllm:num_requests_running{model_name="qwen35B"} 2.0
+vllm:num_requests_waiting{model_name="qwen35B"} 4.0
+vllm:kv_cache_usage_perc{model_name="qwen35B"} 0.63
+vllm:prompt_tokens_total{model_name="qwen35B"} 2000.0
+vllm:generation_tokens_total{model_name="qwen35B"} 900.0
+vllm:prefix_cache_queries_total{model_name="qwen35B"} 500.0
+vllm:prefix_cache_hits_total{model_name="qwen35B"} 410.0
+vllm:external_prefix_cache_hits_total{model_name="qwen35B"} 7.0
+vllm:num_preemptions_total{model_name="qwen35B"} 1.0
+vllm:time_to_first_token_seconds_sum{model_name="qwen35B"} 20.0
+vllm:time_to_first_token_seconds_count{model_name="qwen35B"} 50.0
+vllm:inter_token_latency_seconds_sum{model_name="qwen35B"} 8.0
+vllm:inter_token_latency_seconds_count{model_name="qwen35B"} 400.0
+`
+
+func TestMapVLLMModernMetricNames(t *testing.T) {
+	var s models.LLMSample
+	var ctr llmCounterState
+	mapVLLM(parseProm(vllmModernMetrics), &s, &ctr)
+
+	assertFloat(t, "kv_cache_usage_ratio", s.KVCacheUsageRatio, 0.63)
+	assertInt(t, "prefix_cache_queries_total", s.PrefixCacheQueriesTotal, 500)
+	assertInt(t, "prefix_cache_hits_total", s.PrefixCacheHitsTotal, 410)
+	assertInt(t, "generated_tokens_total", s.GeneratedTokensTotal, 900)
+
+	if s.RequestsRunning == nil || *s.RequestsRunning != 2 {
+		t.Errorf("requests_running = %v, want 2", s.RequestsRunning)
+	}
+
+	// The renamed inter-token-latency histogram must feed the TPOT counters.
+	if ctr.tpotSum != 8 || ctr.tpotCount != 400 {
+		t.Errorf("tpot histogram = %v/%v, want 8/400", ctr.tpotSum, ctr.tpotCount)
+	}
+	if ctr.ttftSum != 20 || ctr.ttftCount != 50 {
+		t.Errorf("ttft histogram = %v/%v, want 20/50", ctr.ttftSum, ctr.ttftCount)
+	}
+
+	// external_prefix_cache_* is a different subsystem (offloaded KV) and
+	// must not be mistaken for the local prefix cache.
+	if ctr.prefixHits != 410 {
+		t.Errorf("prefix hits = %v, want 410 (not the external counter)", ctr.prefixHits)
+	}
+}
+
+// The older naming must keep working, so upgrading the agent doesn't break
+// hosts still on an earlier vLLM.
+func TestMapVLLMLegacyMetricNamesStillWork(t *testing.T) {
+	var s models.LLMSample
+	var ctr llmCounterState
+	mapVLLM(parseProm(vllmMetrics), &s, &ctr)
+
+	assertFloat(t, "kv_cache_usage_ratio", s.KVCacheUsageRatio, 0.42)
+	assertInt(t, "prefix_cache_hits_total", s.PrefixCacheHitsTotal, 600)
+	if ctr.tpotSum != 5 || ctr.tpotCount != 250 {
+		t.Errorf("legacy tpot histogram = %v/%v, want 5/250", ctr.tpotSum, ctr.tpotCount)
+	}
+}
+
+func TestModelNameFromVLLMLabel(t *testing.T) {
+	c := New(config.LLM{Autodetect: boolPtr(false)})
+	state := &llmEndpointState{cfg: config.LLMEndpoint{URL: "http://127.0.0.1:8035"}}
+
+	got := c.llmModelName("http://127.0.0.1:8035", state, parseProm(vllmModernMetrics), runtimeVLLM, time.Now())
+	if got != "qwen35B" {
+		t.Errorf("model = %q, want qwen35B (from the model_name label, no /v1/models call)", got)
+	}
+}
+
 func TestParsePromLabelsAndValues(t *testing.T) {
 	m := parseProm(vllmMetrics)
 

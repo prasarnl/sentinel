@@ -148,30 +148,53 @@ func (c *Collector) scrapeLLMEndpoint(url string, state *llmEndpointState, now t
 	return sample, true
 }
 
+// vLLM renames metrics between releases, so each logical metric lists every
+// spelling we know of, newest first. Notably v0.9+ dropped the "gpu_" prefix
+// from the cache metrics and replaced time_per_output_token with
+// inter_token_latency. Matching only one spelling silently yields nil for
+// the metric on every other version, which is indistinguishable from a
+// runtime that genuinely can't report it — so the fallbacks matter.
+var (
+	vllmKVCacheNames     = []string{"vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc"}
+	vllmPrefixQueryNames = []string{"vllm:prefix_cache_queries_total", "vllm:gpu_prefix_cache_queries_total"}
+	vllmPrefixHitNames   = []string{"vllm:prefix_cache_hits_total", "vllm:gpu_prefix_cache_hits_total"}
+	vllmRunningNames     = []string{"vllm:num_requests_running"}
+	vllmWaitingNames     = []string{"vllm:num_requests_waiting"}
+	vllmPromptNames      = []string{"vllm:prompt_tokens_total"}
+	vllmGeneratedNames   = []string{"vllm:generation_tokens_total"}
+	vllmPreemptionNames  = []string{"vllm:num_preemptions_total"}
+
+	// Histogram base names (the _sum/_count suffixes are appended).
+	vllmTTFTBases = []string{"vllm:time_to_first_token_seconds"}
+	vllmTPOTBases = []string{
+		"vllm:inter_token_latency_seconds",
+		"vllm:time_per_output_token_seconds",
+		"vllm:request_time_per_output_token_seconds",
+	}
+)
+
 // mapVLLM maps vLLM's metric names onto the normalized sample. vLLM reports
 // the richest set of the supported runtimes: it is the only one exposing
 // prefix-cache hit counters and scheduler preemptions.
 func mapVLLM(m promMetrics, s *models.LLMSample, ctr *llmCounterState) {
 	// Despite the "_perc" suffix vLLM reports this as a 0..1 fraction, which
 	// matches llama.cpp's ratio, so no conversion is needed.
-	s.KVCacheUsageRatio = m.ptr("vllm:gpu_cache_usage_perc")
+	s.KVCacheUsageRatio = m.firstPtr(vllmKVCacheNames...)
 
-	s.PromptTokensTotal = intPtr(m, "vllm:prompt_tokens_total")
-	s.GeneratedTokensTotal = intPtr(m, "vllm:generation_tokens_total")
-	s.PrefixCacheQueriesTotal = intPtr(m, "vllm:gpu_prefix_cache_queries_total")
-	s.PrefixCacheHitsTotal = intPtr(m, "vllm:gpu_prefix_cache_hits_total")
-	s.RequestsRunning = intFromMetric(m, "vllm:num_requests_running")
-	s.RequestsWaiting = intFromMetric(m, "vllm:num_requests_waiting")
+	s.PromptTokensTotal = intPtrFirst(m, vllmPromptNames...)
+	s.GeneratedTokensTotal = intPtrFirst(m, vllmGeneratedNames...)
+	s.PrefixCacheQueriesTotal = intPtrFirst(m, vllmPrefixQueryNames...)
+	s.PrefixCacheHitsTotal = intPtrFirst(m, vllmPrefixHitNames...)
+	s.RequestsRunning = intFromFirst(m, vllmRunningNames...)
+	s.RequestsWaiting = intFromFirst(m, vllmWaitingNames...)
 
-	ctr.promptTokens, _ = m.value("vllm:prompt_tokens_total")
-	ctr.genTokens, _ = m.value("vllm:generation_tokens_total")
-	ctr.prefixQueries, _ = m.value("vllm:gpu_prefix_cache_queries_total")
-	ctr.prefixHits, _ = m.value("vllm:gpu_prefix_cache_hits_total")
-	ctr.preemptions, _ = m.value("vllm:num_preemptions_total")
-	ctr.ttftSum, _ = m.value("vllm:time_to_first_token_seconds_sum")
-	ctr.ttftCount, _ = m.value("vllm:time_to_first_token_seconds_count")
-	ctr.tpotSum, _ = m.value("vllm:time_per_output_token_seconds_sum")
-	ctr.tpotCount, _ = m.value("vllm:time_per_output_token_seconds_count")
+	ctr.promptTokens, _ = m.firstValue(vllmPromptNames...)
+	ctr.genTokens, _ = m.firstValue(vllmGeneratedNames...)
+	ctr.prefixQueries, _ = m.firstValue(vllmPrefixQueryNames...)
+	ctr.prefixHits, _ = m.firstValue(vllmPrefixHitNames...)
+	ctr.preemptions, _ = m.firstValue(vllmPreemptionNames...)
+	ctr.ttftSum, ctr.ttftCount = m.histogram(vllmTTFTBases...)
+	ctr.tpotSum, ctr.tpotCount = m.histogram(vllmTPOTBases...)
 }
 
 // mapLlamaCpp maps llama.cpp's metric names. It exposes no prefix-cache or
@@ -264,10 +287,12 @@ func avgMillis(prevSum, curSum, prevCount, curCount float64) (float64, bool) {
 // stable endpoint.
 func (c *Collector) llmModelName(url string, state *llmEndpointState, m promMetrics, runtime string, now time.Time) string {
 	if runtime == runtimeVLLM {
-		for _, name := range []string{"vllm:num_requests_running", "vllm:gpu_cache_usage_perc"} {
-			if model := m.label(name, "model_name"); model != "" {
-				return model
-			}
+		// vLLM tags its series with model_name, so no extra request is
+		// needed — and /v1/models would need the API key that /metrics does
+		// not, since vLLM's auth middleware only guards /v1 paths.
+		names := append(append([]string{}, vllmRunningNames...), vllmKVCacheNames...)
+		if model := m.firstLabel("model_name", names...); model != "" {
+			return model
 		}
 	}
 
@@ -342,7 +367,15 @@ func (c *Collector) httpGet(url, apiKey string) (string, bool) {
 }
 
 func intPtr(m promMetrics, name string) *int64 {
-	v, ok := m.value(name)
+	return intPtrFirst(m, name)
+}
+
+func intFromMetric(m promMetrics, name string) *int {
+	return intFromFirst(m, name)
+}
+
+func intPtrFirst(m promMetrics, names ...string) *int64 {
+	v, ok := m.firstValue(names...)
 	if !ok {
 		return nil
 	}
@@ -350,8 +383,8 @@ func intPtr(m promMetrics, name string) *int64 {
 	return &i
 }
 
-func intFromMetric(m promMetrics, name string) *int {
-	v, ok := m.value(name)
+func intFromFirst(m promMetrics, names ...string) *int {
+	v, ok := m.firstValue(names...)
 	if !ok {
 		return nil
 	}
